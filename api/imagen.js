@@ -1,30 +1,21 @@
-export const config = { runtime: 'edge' };
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-export default async function handler(req) {
-  // CORS — permite peticiones desde cualquier origen
-  const cors = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  };
-
-  // Preflight
   if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: cors });
+    return res.status(204).end();
   }
 
   if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405, headers: cors });
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const { prompt, width, height, steps } = await req.json();
+    const { prompt, width, height, steps } = req.body;
 
     if (!prompt) {
-      return new Response(JSON.stringify({ error: 'Falta el prompt' }), {
-        status: 400,
-        headers: { ...cors, 'Content-Type': 'application/json' },
-      });
+      return res.status(400).json({ error: 'Falta el prompt' });
     }
 
     const HF_TOKEN = process.env.HF_TOKEN;
@@ -51,35 +42,21 @@ export default async function handler(req) {
       }
     );
 
-    // Modelo cargando
     if (hfResp.status === 503) {
-      return new Response(JSON.stringify({ error: 'modelo_cargando' }), {
-        status: 503,
-        headers: { ...cors, 'Content-Type': 'application/json' },
-      });
+      return res.status(503).json({ error: 'modelo_cargando' });
     }
 
     if (!hfResp.ok) {
       const err = await hfResp.json().catch(() => ({}));
-      return new Response(JSON.stringify({ error: err.error || 'HF error ' + hfResp.status }), {
-        status: hfResp.status,
-        headers: { ...cors, 'Content-Type': 'application/json' },
-      });
+      return res.status(hfResp.status).json({ error: err.error || 'HF error ' + hfResp.status });
     }
 
-    // Devolver la imagen como base64 para que el browser la muestre
     const imgBuffer = await hfResp.arrayBuffer();
     const base64 = Buffer.from(imgBuffer).toString('base64');
 
-    return new Response(JSON.stringify({ image: base64, mimeType: 'image/jpeg' }), {
-      status: 200,
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    });
+    return res.status(200).json({ image: base64, mimeType: 'image/jpeg' });
 
   } catch (e) {
-    return new Response(JSON.stringify({ error: e.message }), {
-      status: 500,
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    });
+    return res.status(500).json({ error: e.message });
   }
 }
