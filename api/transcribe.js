@@ -1,5 +1,5 @@
 // api/transcribe.js — Vercel serverless endpoint
-// Descarga el audio de TikTok y lo manda a Whisper para transcribir
+// Descarga el audio de TikTok/Instagram y lo manda a Whisper
 
 export const config = { maxDuration: 60 };
 
@@ -16,19 +16,25 @@ export default async function handler(req, res) {
   if (!apiKey)   return res.status(400).json({ error: 'apiKey requerido' });
 
   try {
-    // 1. Descargar el video desde tikwm
+    // 1. Descargar el video desde TikTok CDN con headers reales de browser
     const videoRes = await fetch(videoUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      signal: AbortSignal.timeout(30000),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://www.tiktok.com/',
+        'Accept': '*/*',
+        'Accept-Language': 'es-ES,es;q=0.9',
+      },
+      signal: AbortSignal.timeout(35000),
     });
-    if (!videoRes.ok) throw new Error('No se pudo descargar el video');
+
+    if (!videoRes.ok) throw new Error(`No se pudo descargar el video (${videoRes.status})`);
 
     const videoBuffer = await videoRes.arrayBuffer();
-    const videoBlob   = new Blob([videoBuffer], { type: 'video/mp4' });
+    if (videoBuffer.byteLength < 1000) throw new Error('Video descargado está vacío');
 
     // 2. Mandar a Whisper
     const form = new FormData();
-    form.append('file', new File([videoBlob], 'audio.mp4', { type: 'video/mp4' }));
+    form.append('file', new File([videoBuffer], 'audio.mp4', { type: 'video/mp4' }));
     form.append('model', 'whisper-1');
     form.append('language', 'es');
 
@@ -41,10 +47,12 @@ export default async function handler(req, res) {
 
     const whisperJson = await whisperRes.json();
     if (!whisperRes.ok) throw new Error(whisperJson.error?.message || 'Error Whisper');
+    if (!whisperJson.text) throw new Error('Whisper no retornó texto');
 
     return res.status(200).json({ text: whisperJson.text });
 
   } catch (e) {
+    console.error('[transcribe]', e.message);
     return res.status(500).json({ error: e.message });
   }
 }
