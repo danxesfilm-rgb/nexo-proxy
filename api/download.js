@@ -249,8 +249,10 @@ export default async function handler(req, res) {
             });
             if (embedRes.ok) {
               const html = await embedRes.text();
-              // Buscar video_url en JSON embebido, o etiqueta OG video como fallback
               const videoMatch = html.match(/"video_url"\s*:\s*"([^"]+)"/)
+                || html.match(/"contentUrl"\s*:\s*"([^"]+)"/)
+                || html.match(/<meta[^>]+property=["']og:video:secure_url["'][^>]+content=["']([^"']+)["']/i)
+                || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:video:secure_url["']/i)
                 || html.match(/<meta[^>]+property=["']og:video["'][^>]+content=["']([^"']+)["']/i)
                 || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:video["']/i)
                 || html.match(/<meta[^>]+property=["']og:video:url["'][^>]+content=["']([^"']+)["']/i)
@@ -258,6 +260,7 @@ export default async function handler(req, res) {
               if (videoMatch) {
                 const videoUrl = videoMatch[1].replace(/\\u0026/g, '&').replace(/\\/g, '');
                 const thumbMatch = html.match(/"thumbnail_src"\s*:\s*"([^"]+)"/)
+                  || html.match(/"display_url"\s*:\s*"([^"]+)"/)
                   || html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
                   || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
                 const titleMatch = html.match(/<title>([^<]+)<\/title>/);
@@ -271,30 +274,28 @@ export default async function handler(req, res) {
         } catch (_) {}
       }
 
-      // Fallback 4: snapsave.app (servicio independiente, diferente infraestructura)
-      if (!tikOk) {
+      // Fallback 4: embed via allorigins proxy (ruta de red diferente a Vercel)
+      if (!tikOk && igShortcode) {
         try {
-          const ssRes = await fetch('https://snapsave.app/action.php', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-              'Referer': 'https://snapsave.app/',
-              'Origin': 'https://snapsave.app'
-            },
-            body: `url=${encodeURIComponent(igUrl)}&lang=en`,
-            signal: AbortSignal.timeout(12000)
-          });
-          if (ssRes.ok) {
-            const ssHtml = await ssRes.text();
-            // Extraer primera URL MP4 de los links de descarga
-            const mp4Match = ssHtml.match(/href="(https:\/\/[^"]+\.mp4[^"]*)"/i)
-              || ssHtml.match(/href="(https:\/\/scontent[^"]+)"/i)
-              || ssHtml.match(/href="(https:\/\/[^"]+(?:download|media)[^"]+)"/i);
-            if (mp4Match) {
-              const dlUrl = mp4Match[1].replace(/&amp;/g, '&');
+          const embedUrl = `https://www.instagram.com/p/${igShortcode}/embed/captioned/`;
+          const proxyRes = await fetch(
+            `https://api.allorigins.win/raw?url=${encodeURIComponent(embedUrl)}`,
+            { signal: AbortSignal.timeout(15000) }
+          );
+          if (proxyRes.ok) {
+            const html = await proxyRes.text();
+            const videoMatch = html.match(/"video_url"\s*:\s*"([^"]+)"/)
+              || html.match(/"contentUrl"\s*:\s*"([^"]+)"/)
+              || html.match(/<meta[^>]+property=["']og:video[^"']*["'][^>]+content=["']([^"']+)["']/i)
+              || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:video[^"']*["']/i);
+            if (videoMatch) {
+              const videoUrl = videoMatch[1].replace(/\\u0026/g, '&').replace(/\\/g, '');
+              const thumbMatch = html.match(/"thumbnail_src"\s*:\s*"([^"]+)"/)
+                || html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+                || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+              if (thumbMatch && !thumbnail) thumbnail = thumbMatch[1].replace(/\\u0026/g, '&').replace(/\\/g, '');
               title = title || 'Post de Instagram';
-              videos.push({ quality: 'Descargar MP4', url: dlUrl, extension: 'mp4', type: 'video' });
+              videos.push({ quality: 'Descargar MP4', url: videoUrl, extension: 'mp4' });
               tikOk = true;
             }
           }
