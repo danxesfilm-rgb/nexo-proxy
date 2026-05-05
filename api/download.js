@@ -201,7 +201,11 @@ export default async function handler(req, res) {
             try {
               const r = await fetch(ep, {
                 method: 'POST',
-                headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+                headers: {
+                  'Accept': 'application/json',
+                  'Content-Type': 'application/json',
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                },
                 body: JSON.stringify({ url, downloadMode: 'auto' }),
                 signal: AbortSignal.timeout(12000)
               });
@@ -241,11 +245,17 @@ export default async function handler(req, res) {
             });
             if (embedRes.ok) {
               const html = await embedRes.text();
-              // Buscar video_url en el JSON embebido en la página
-              const videoMatch = html.match(/"video_url"\s*:\s*"([^"]+)"/);
+              // Buscar video_url en JSON embebido, o etiqueta OG video como fallback
+              const videoMatch = html.match(/"video_url"\s*:\s*"([^"]+)"/)
+                || html.match(/<meta[^>]+property=["']og:video["'][^>]+content=["']([^"']+)["']/i)
+                || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:video["']/i)
+                || html.match(/<meta[^>]+property=["']og:video:url["'][^>]+content=["']([^"']+)["']/i)
+                || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:video:url["']/i);
               if (videoMatch) {
                 const videoUrl = videoMatch[1].replace(/\\u0026/g, '&').replace(/\\/g, '');
-                const thumbMatch = html.match(/"thumbnail_src"\s*:\s*"([^"]+)"/);
+                const thumbMatch = html.match(/"thumbnail_src"\s*:\s*"([^"]+)"/)
+                  || html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+                  || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
                 const titleMatch = html.match(/<title>([^<]+)<\/title>/);
                 if (thumbMatch) thumbnail = thumbMatch[1].replace(/\\u0026/g, '&').replace(/\\/g, '');
                 if (titleMatch) title = titleMatch[1].replace(/ • Instagram$/i, '').trim();
@@ -257,28 +267,22 @@ export default async function handler(req, res) {
         } catch (_) {}
       }
 
-      // Fallback 4: AllInOneDownloader API (gratuito, sin clave)
-      if (!tikOk) {
+      // Fallback 4: servidor yt-dlp (Railway) — soporta Instagram nativamente
+      if (!tikOk && YT_SERVER) {
         try {
-          const aioRes = await fetch(`https://allinonedownloader.com/api/instagram?url=${encodeURIComponent(url)}`, {
-            headers: { 'User-Agent': 'Mozilla/5.0' },
-            signal: AbortSignal.timeout(15000)
-          });
-          if (aioRes.ok) {
-            const aioJson = await aioRes.json();
-            if (aioJson.success && aioJson.data) {
-              const d = aioJson.data;
-              title = d.title || 'Post de Instagram';
-              thumbnail = d.thumbnail || '';
-              (d.medias || []).filter(m => m.type === 'video' || m.type === 'image').forEach(m => {
-                videos.push({
-                  quality: m.quality || m.resolution || (m.type === 'image' ? 'Foto' : 'MP4'),
-                  url: m.url,
-                  extension: m.extension || (m.type === 'image' ? 'jpg' : 'mp4'),
-                  mediaType: m.type
-                });
-              });
+          const r = await fetch(`${YT_SERVER}/info?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(25000) });
+          if (r.ok) {
+            const data = await r.json();
+            (data.formats || []).forEach(f => videos.push({
+              quality: f.quality || 'Descargar',
+              url: f.stream_url,
+              extension: f.ext || 'mp4',
+              type: f.type === 'audio' ? 'audio' : 'video'
+            }));
+            if (videos.length) {
               tikOk = true;
+              if (!title && data.title) title = data.title;
+              if (!thumbnail && data.thumbnail) thumbnail = data.thumbnail;
             }
           }
         } catch (_) {}
@@ -288,7 +292,7 @@ export default async function handler(req, res) {
       if (!tikOk) {
         const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || '';
         if (!RAPIDAPI_KEY) {
-          return res.status(503).json({ error: 'No se pudo descargar este post. Intenta con otro enlace.' });
+          return res.status(503).json({ error: 'Este post no está disponible para descargar en este momento. Prueba con otro enlace o intenta más tarde.' });
         }
 
         let rapRes;
