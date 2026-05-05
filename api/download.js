@@ -282,7 +282,7 @@ export default async function handler(req, res) {
             );
             const toAdd = combined.length ? combined.slice(0, 2) : fmts.filter(f => f.type !== 'audio').slice(0, 1);
             toAdd.forEach(f => videos.push({
-              quality: 'Descargar MP4',
+              quality: f.quality || 'Descargar MP4',
               url: f.stream_url,
               extension: f.ext || 'mp4',
               type: 'video'
