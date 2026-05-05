@@ -33,37 +33,45 @@ export default async function handler(req, res) {
       if (!ytId) return res.status(400).json({ error: 'URL de YouTube inválida.' });
 
       const ytUrl      = `https://www.youtube.com/watch?v=${ytId}`;
-      const COBALT     = 'https://api.cobalt.tools/api/json';
       const COBALT_HDR = { 'Accept': 'application/json', 'Content-Type': 'application/json' };
+
+      // Helper: intenta con endpoint nuevo (/) y si falla prueba el viejo (/api/json)
+      const cobaltFetch = async (body) => {
+        for (const endpoint of ['https://api.cobalt.tools/', 'https://api.cobalt.tools/api/json']) {
+          try {
+            const r = await fetch(endpoint, {
+              method: 'POST', headers: COBALT_HDR,
+              body: JSON.stringify(body),
+              signal: AbortSignal.timeout(20000)
+            });
+            if (r.ok) return r;
+          } catch (_) {}
+        }
+        return null;
+      };
 
       // Pedir MP4, MP3 y título en paralelo para máxima velocidad
       const [videoRes, audioRes, titleRes] = await Promise.allSettled([
-        fetch(COBALT, {
-          method: 'POST', headers: COBALT_HDR,
-          body: JSON.stringify({ url: ytUrl, downloadMode: 'auto', videoQuality: '1080' }),
-          signal: AbortSignal.timeout(22000)
-        }),
-        fetch(COBALT, {
-          method: 'POST', headers: COBALT_HDR,
-          body: JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3' }),
-          signal: AbortSignal.timeout(22000)
-        }),
+        cobaltFetch({ url: ytUrl, downloadMode: 'auto',  videoQuality: '1080' }),
+        cobaltFetch({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3' }),
         fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(ytUrl)}&format=json`, {
           signal: AbortSignal.timeout(5000)
         })
       ]);
 
+      const cobaltOk = (j) => j && j.url && ['redirect','tunnel','stream'].includes(j.status);
+
       const videos = [];
 
-      if (videoRes.status === 'fulfilled' && videoRes.value.ok) {
+      if (videoRes.status === 'fulfilled' && videoRes.value) {
         const j = await videoRes.value.json().catch(() => ({}));
-        if ((j.status === 'redirect' || j.status === 'stream') && j.url)
+        if (cobaltOk(j))
           videos.push({ quality: 'MP4 · Video', url: j.url, extension: 'mp4', type: 'video' });
       }
 
-      if (audioRes.status === 'fulfilled' && audioRes.value.ok) {
+      if (audioRes.status === 'fulfilled' && audioRes.value) {
         const j = await audioRes.value.json().catch(() => ({}));
-        if ((j.status === 'redirect' || j.status === 'stream') && j.url)
+        if (cobaltOk(j))
           videos.push({ quality: 'MP3 · Solo audio', url: j.url, extension: 'mp3', type: 'audio' });
       }
 
@@ -136,15 +144,21 @@ export default async function handler(req, res) {
       // Fallback 2: Cobalt (gratis, sin API key)
       if (!tikOk) {
         try {
-          const cobaltRes = await fetch('https://api.cobalt.tools/api/json', {
-            method: 'POST',
-            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url, downloadMode: 'auto' }),
-            signal: AbortSignal.timeout(12000)
-          });
-          if (cobaltRes.ok) {
+          let cobaltRes = null;
+          for (const ep of ['https://api.cobalt.tools/', 'https://api.cobalt.tools/api/json']) {
+            try {
+              const r = await fetch(ep, {
+                method: 'POST',
+                headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url, downloadMode: 'auto' }),
+                signal: AbortSignal.timeout(12000)
+              });
+              if (r.ok) { cobaltRes = r; break; }
+            } catch (_) {}
+          }
+          if (cobaltRes) {
             const cj = await cobaltRes.json();
-            if ((cj.status === 'redirect' || cj.status === 'stream') && cj.url) {
+            if (['redirect','tunnel','stream'].includes(cj.status) && cj.url) {
               title = 'Post de Instagram';
               videos.push({ quality: 'Descargar MP4', url: cj.url, extension: 'mp4' });
               tikOk = true;
