@@ -1,5 +1,28 @@
 export const config = { maxDuration: 60 };
 
+// Caché simple en memoria para resultados (5 minutos)
+const cache = new Map();
+const CACHE_TTL = 5 * 60 * 1000;
+
+function getCacheKey(url, service) {
+  return `${service}:${url}`;
+}
+
+function getCache(url, service) {
+  const key = getCacheKey(url, service);
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+  cache.delete(key);
+  return null;
+}
+
+function setCache(url, service, data) {
+  const key = getCacheKey(url, service);
+  cache.set(key, { data, timestamp: Date.now() });
+}
+
 // Servidor Render con yt-dlp — configurar YT_SERVER_URL en Vercel env vars
 const YT_SERVER = process.env.YT_SERVER_URL || '';
 
@@ -24,6 +47,12 @@ export default async function handler(req, res) {
   const svc = String(service).toLowerCase();
   if (!['instagram', 'tiktok', 'youtube'].includes(svc)) {
     return res.status(400).json({ error: 'Servicio no reconocido.' });
+  }
+
+  // Verificar caché
+  const cached = getCache(url, svc);
+  if (cached) {
+    return res.status(200).json(cached);
   }
 
   try {
@@ -125,7 +154,9 @@ export default async function handler(req, res) {
       if (!videos.length)
         return res.status(502).json({ error: 'YouTube no disponible en este momento. Intenta de nuevo en unos segundos.' });
 
-      return res.status(200).json({ title, thumbnail, platform: 'youtube', downloadUrl: videos[0].url, videos });
+      const resultYT = { title, thumbnail, platform: 'youtube', downloadUrl: videos[0].url, videos };
+      setCache(url, svc, resultYT);
+      return res.status(200).json(resultYT);
     }
 
     /* ── TikTok / Instagram ─────────────────────────────────────────── */
@@ -311,13 +342,15 @@ export default async function handler(req, res) {
 
     if (!videos.length) return res.status(502).json({ error: 'No se encontró URL de descarga.' });
 
-    return res.status(200).json({
+    const result = {
       title,
       thumbnail,
       platform: svc,
       downloadUrl: videos[0].url,
       videos
-    });
+    };
+    setCache(url, svc, result);
+    return res.status(200).json(result);
 
   } catch (err) {
     console.error('[download]', err?.message);
