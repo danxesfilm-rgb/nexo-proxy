@@ -226,7 +226,34 @@ export default async function handler(req, res) {
         } catch (_) {}
       }
 
-      // Fallback 4: Instagram Reels Downloader API (RapidAPI) — último recurso
+      // Fallback 4: AllInOneDownloader API (gratuito, sin clave)
+      if (!tikOk) {
+        try {
+          const aioRes = await fetch(`https://allinonedownloader.com/api/instagram?url=${encodeURIComponent(url)}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: AbortSignal.timeout(15000)
+          });
+          if (aioRes.ok) {
+            const aioJson = await aioRes.json();
+            if (aioJson.success && aioJson.data) {
+              const d = aioJson.data;
+              title = d.title || 'Post de Instagram';
+              thumbnail = d.thumbnail || '';
+              (d.medias || []).filter(m => m.type === 'video' || m.type === 'image').forEach(m => {
+                videos.push({
+                  quality: m.quality || m.resolution || (m.type === 'image' ? 'Foto' : 'MP4'),
+                  url: m.url,
+                  extension: m.extension || (m.type === 'image' ? 'jpg' : 'mp4'),
+                  mediaType: m.type
+                });
+              });
+              tikOk = true;
+            }
+          }
+        } catch (_) {}
+      }
+
+      // Fallback 5: Instagram Reels Downloader API (RapidAPI) — último recurso
       if (!tikOk) {
         const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || '';
         if (!RAPIDAPI_KEY) {
