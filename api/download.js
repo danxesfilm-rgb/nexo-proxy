@@ -226,12 +226,15 @@ export default async function handler(req, res) {
         } catch (_) {}
       }
 
-      // Fallback 4: Instagram Reels Downloader API (RapidAPI)
+      // Fallback 4: Instagram Reels Downloader API (RapidAPI) — último recurso
+      if (!tikOk) {
         const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || '';
-        if (!RAPIDAPI_KEY) return res.status(503).json({ error: 'No se pudo descargar este post. Intenta con otro enlace.' });
+        if (!RAPIDAPI_KEY) {
+          return res.status(503).json({ error: 'No se pudo descargar este post. Intenta con otro enlace.' });
+        }
 
-        // RapidAPI — hasta 2 intentos si devuelve 5xx
-        let rapRes, rapAttempt = 0;
+        let rapRes;
+        let rapAttempt = 0;
         while (rapAttempt < 2) {
           rapRes = await fetch(
             `https://instagram-reels-downloader-api.p.rapidapi.com/download?url=${encodeURIComponent(url)}`,
@@ -244,18 +247,26 @@ export default async function handler(req, res) {
               signal: AbortSignal.timeout(15000)
             }
           );
-          if (rapRes.ok || rapRes.status < 500) break; // éxito o error cliente → no reintentar
+          if (rapRes.ok || rapRes.status < 500) break;
           rapAttempt++;
-          if (rapAttempt < 2) await new Promise(r => setTimeout(r, 1200)); // espera 1.2s antes de reintentar
+          if (rapAttempt < 2) await new Promise(r => setTimeout(r, 1200));
         }
+
         if (!rapRes.ok) {
           const code = rapRes.status;
-          if (code === 429) return res.status(502).json({ error: 'Límite de descargas alcanzado. Intenta en unos minutos.' });
-          if (code >= 500) return res.status(502).json({ error: 'Instagram no está disponible en este momento. Intenta más tarde.' });
+          if (code === 429) {
+            return res.status(502).json({ error: 'Límite de descargas alcanzado. Intenta en unos minutos.' });
+          }
+          if (code >= 500) {
+            return res.status(502).json({ error: 'Instagram no está disponible en este momento. Intenta más tarde.' });
+          }
           return res.status(502).json({ error: `No se pudo descargar este post (${code}).` });
         }
+
         const rapJson = await rapRes.json();
-        if (!rapJson.success || !rapJson.data) return res.status(502).json({ error: rapJson.message || 'Sin datos.' });
+        if (!rapJson.success || !rapJson.data) {
+          return res.status(502).json({ error: rapJson.message || 'Sin datos.' });
+        }
 
         const d = rapJson.data;
         title     = d.title     || 'Post de Instagram';
@@ -265,7 +276,7 @@ export default async function handler(req, res) {
             quality:   m.quality || m.resolution || (m.type === 'image' ? 'Foto' : 'MP4'),
             url:       m.url,
             extension: m.extension || (m.type === 'image' ? 'jpg' : 'mp4'),
-            mediaType: m.type   // 'video' | 'image'
+            mediaType: m.type
           });
         });
       }
