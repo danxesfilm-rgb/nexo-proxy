@@ -197,33 +197,56 @@ export default async function handler(req, res) {
       const igShortcode = url.match(/\/(p|reel|tv|reels)\/([A-Za-z0-9_-]+)/)?.[2];
       const igUrl = igShortcode ? `https://www.instagram.com/reel/${igShortcode}/` : url;
 
-      // Fallback 2: Cobalt (gratis, sin API key)
+      // Fallback 2: Cobalt — instancias múltiples (oficial + comunitarias, IPs distintas)
       if (!tikOk) {
         try {
+          // Obtener instancias comunitarias activas en tiempo real
+          let cobaltInstances = [
+            'https://api.cobalt.tools',
+            'https://cobalt.imput.net',
+            'https://cobalt.api.timelessnesses.me',
+          ];
+          try {
+            const listRes = await fetch('https://instances.cobalt.best/api/instances.json', {
+              signal: AbortSignal.timeout(4000)
+            });
+            if (listRes.ok) {
+              const list = await listRes.json();
+              const live = (Array.isArray(list) ? list : [])
+                .filter(i => i.api && i.protocol === 'https' && (i.score ?? 100) > 50)
+                .slice(0, 6)
+                .map(i => i.api.replace(/\/$/, ''));
+              if (live.length) cobaltInstances = [...live, 'https://api.cobalt.tools'];
+            }
+          } catch (_) {}
+
           let cobaltRes = null;
-          for (const ep of ['https://api.cobalt.tools/', 'https://api.cobalt.tools/api/json']) {
-            try {
-              const r = await fetch(ep, {
-                method: 'POST',
-                headers: {
-                  'Accept': 'application/json',
-                  'Content-Type': 'application/json',
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-                },
-                body: JSON.stringify({ url: igUrl, downloadMode: 'auto' }),
-                signal: AbortSignal.timeout(12000)
-              });
-              if (r.ok) { cobaltRes = r; break; }
-            } catch (_) {}
+          for (const base of cobaltInstances) {
+            for (const ep of [`${base}/`, `${base}/api/json`]) {
+              try {
+                const r = await fetch(ep, {
+                  method: 'POST',
+                  headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                  },
+                  body: JSON.stringify({ url: igUrl, downloadMode: 'auto' }),
+                  signal: AbortSignal.timeout(8000)
+                });
+                if (r.ok) { cobaltRes = r; break; }
+              } catch (_) {}
+            }
+            if (cobaltRes) break;
           }
           if (cobaltRes) {
             const cj = await cobaltRes.json();
             if (['redirect','tunnel','stream'].includes(cj.status) && cj.url) {
-              title = 'Post de Instagram';
+              title = title || 'Post de Instagram';
               videos.push({ quality: 'Descargar MP4', url: cj.url, extension: 'mp4' });
               tikOk = true;
             } else if (cj.status === 'picker' && cj.picker?.length) {
-              title = 'Post de Instagram';
+              title = title || 'Post de Instagram';
               cj.picker.forEach((item, i) => {
                 videos.push({ quality: `Elemento ${i + 1}`, url: item.url, extension: item.type === 'photo' ? 'jpg' : 'mp4' });
               });
