@@ -194,8 +194,39 @@ export default async function handler(req, res) {
         } catch (_) {}
       }
 
+      // Fallback 3: Instagram embed page scraping (sin API key, público)
       if (!tikOk) {
-        // Fallback 3: Instagram Reels Downloader API (RapidAPI)
+        try {
+          const shortcode = url.match(/\/(p|reel|tv|reels)\/([A-Za-z0-9_-]+)/)?.[2];
+          if (shortcode) {
+            const embedRes = await fetch(`https://www.instagram.com/p/${shortcode}/embed/captioned/`, {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'es-ES,es;q=0.9',
+                'Referer': 'https://www.instagram.com/',
+              },
+              signal: AbortSignal.timeout(10000)
+            });
+            if (embedRes.ok) {
+              const html = await embedRes.text();
+              // Buscar video_url en el JSON embebido en la página
+              const videoMatch = html.match(/"video_url"\s*:\s*"([^"]+)"/);
+              if (videoMatch) {
+                const videoUrl = videoMatch[1].replace(/\\u0026/g, '&').replace(/\\/g, '');
+                const thumbMatch = html.match(/"thumbnail_src"\s*:\s*"([^"]+)"/);
+                const titleMatch = html.match(/<title>([^<]+)<\/title>/);
+                if (thumbMatch) thumbnail = thumbMatch[1].replace(/\\u0026/g, '&').replace(/\\/g, '');
+                if (titleMatch) title = titleMatch[1].replace(/ • Instagram$/i, '').trim();
+                videos.push({ quality: 'Descargar MP4', url: videoUrl, extension: 'mp4' });
+                tikOk = true;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      // Fallback 4: Instagram Reels Downloader API (RapidAPI)
         const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || '';
         if (!RAPIDAPI_KEY) return res.status(503).json({ error: 'No se pudo descargar este post. Intenta con otro enlace.' });
 
