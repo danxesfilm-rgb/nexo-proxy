@@ -273,11 +273,19 @@ export default async function handler(req, res) {
           const r = await fetch(`${YT_SERVER}/info?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(25000) });
           if (r.ok) {
             const data = await r.json();
-            (data.formats || []).forEach(f => videos.push({
-              quality: f.quality || 'Descargar',
+            const fmts = (data.formats || []).filter(f => f.stream_url);
+            // Preferir formatos combinados (no DASH puro) con video+audio
+            const combined = fmts.filter(f =>
+              f.type !== 'audio' &&
+              !(f.quality || '').toLowerCase().includes('dash') &&
+              !(f.quality || '').toLowerCase().includes('video only')
+            );
+            const toAdd = combined.length ? combined.slice(0, 2) : fmts.filter(f => f.type !== 'audio').slice(0, 1);
+            toAdd.forEach(f => videos.push({
+              quality: 'Descargar MP4',
               url: f.stream_url,
               extension: f.ext || 'mp4',
-              type: f.type === 'audio' ? 'audio' : 'video'
+              type: 'video'
             }));
             if (videos.length) {
               tikOk = true;
