@@ -274,14 +274,12 @@ export default async function handler(req, res) {
           if (r.ok) {
             const data = await r.json();
             const fmts = (data.formats || []).filter(f => f.stream_url);
-            // Preferir formatos combinados (no DASH puro) con video+audio
-            const combined = fmts.filter(f =>
-              f.type !== 'audio' &&
-              !(f.quality || '').toLowerCase().includes('dash') &&
-              !(f.quality || '').toLowerCase().includes('video only')
-            );
-            const toAdd = combined.length ? combined.slice(0, 2) : fmts.filter(f => f.type !== 'audio').slice(0, 1);
-            toAdd.forEach(f => videos.push({
+            // Solo usar formatos combinados (video+audio), ignorar DASH puro
+            const combined = fmts.filter(f => {
+              const q = (f.quality || '').toLowerCase();
+              return f.type !== 'audio' && !q.includes('dash') && !q.includes('video only');
+            });
+            combined.slice(0, 3).forEach(f => videos.push({
               quality: f.quality || 'Descargar MP4',
               url: f.stream_url,
               extension: f.ext || 'mp4',
