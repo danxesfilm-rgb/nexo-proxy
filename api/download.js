@@ -193,6 +193,10 @@ export default async function handler(req, res) {
         }
       } catch (_) {}
 
+      // Normalizar URL de Instagram para mayor compatibilidad con los servicios
+      const igShortcode = url.match(/\/(p|reel|tv|reels)\/([A-Za-z0-9_-]+)/)?.[2];
+      const igUrl = igShortcode ? `https://www.instagram.com/reel/${igShortcode}/` : url;
+
       // Fallback 2: Cobalt (gratis, sin API key)
       if (!tikOk) {
         try {
@@ -206,7 +210,7 @@ export default async function handler(req, res) {
                   'Content-Type': 'application/json',
                   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
                 },
-                body: JSON.stringify({ url, downloadMode: 'auto' }),
+                body: JSON.stringify({ url: igUrl, downloadMode: 'auto' }),
                 signal: AbortSignal.timeout(12000)
               });
               if (r.ok) { cobaltRes = r; break; }
@@ -267,7 +271,37 @@ export default async function handler(req, res) {
         } catch (_) {}
       }
 
-      // Fallback 4: servidor yt-dlp (Railway) — soporta Instagram nativamente
+      // Fallback 4: snapsave.app (servicio independiente, diferente infraestructura)
+      if (!tikOk) {
+        try {
+          const ssRes = await fetch('https://snapsave.app/action.php', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              'Referer': 'https://snapsave.app/',
+              'Origin': 'https://snapsave.app'
+            },
+            body: `url=${encodeURIComponent(igUrl)}&lang=en`,
+            signal: AbortSignal.timeout(12000)
+          });
+          if (ssRes.ok) {
+            const ssHtml = await ssRes.text();
+            // Extraer primera URL MP4 de los links de descarga
+            const mp4Match = ssHtml.match(/href="(https:\/\/[^"]+\.mp4[^"]*)"/i)
+              || ssHtml.match(/href="(https:\/\/scontent[^"]+)"/i)
+              || ssHtml.match(/href="(https:\/\/[^"]+(?:download|media)[^"]+)"/i);
+            if (mp4Match) {
+              const dlUrl = mp4Match[1].replace(/&amp;/g, '&');
+              title = title || 'Post de Instagram';
+              videos.push({ quality: 'Descargar MP4', url: dlUrl, extension: 'mp4', type: 'video' });
+              tikOk = true;
+            }
+          }
+        } catch (_) {}
+      }
+
+      // Fallback 6: servidor yt-dlp (Railway) — soporta Instagram nativamente
       if (!tikOk && YT_SERVER) {
         try {
           const r = await fetch(`${YT_SERVER}/info?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(25000) });
