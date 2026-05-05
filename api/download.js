@@ -1,4 +1,4 @@
-export const config = { maxDuration: 30 };
+export const config = { maxDuration: 60 };
 
 // Servidor Render con yt-dlp — configurar YT_SERVER_URL en Vercel env vars
 const YT_SERVER = process.env.YT_SERVER_URL || '';
