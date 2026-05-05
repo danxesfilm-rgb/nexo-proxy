@@ -32,59 +32,92 @@ export default async function handler(req, res) {
       const ytId = extractYtId(url);
       if (!ytId) return res.status(400).json({ error: 'URL de YouTube inválida.' });
 
-      const ytUrl      = `https://www.youtube.com/watch?v=${ytId}`;
-      const COBALT_HDR = { 'Accept': 'application/json', 'Content-Type': 'application/json' };
-
-      // Helper: intenta con endpoint nuevo (/) y si falla prueba el viejo (/api/json)
-      const cobaltFetch = async (body) => {
-        for (const endpoint of ['https://api.cobalt.tools/', 'https://api.cobalt.tools/api/json']) {
-          try {
-            const r = await fetch(endpoint, {
-              method: 'POST', headers: COBALT_HDR,
-              body: JSON.stringify(body),
-              signal: AbortSignal.timeout(20000)
-            });
-            if (r.ok) return r;
-          } catch (_) {}
-        }
-        return null;
-      };
-
-      // Pedir MP4, MP3 y título en paralelo para máxima velocidad
-      const [videoRes, audioRes, titleRes] = await Promise.allSettled([
-        cobaltFetch({ url: ytUrl, downloadMode: 'auto',  videoQuality: '1080' }),
-        cobaltFetch({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3' }),
-        fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(ytUrl)}&format=json`, {
-          signal: AbortSignal.timeout(5000)
-        })
-      ]);
-
-      const cobaltOk = (j) => j && j.url && ['redirect','tunnel','stream'].includes(j.status);
-
+      const ytUrl = `https://www.youtube.com/watch?v=${ytId}`;
       const videos = [];
+      let title     = 'Video de YouTube';
+      let thumbnail = `https://img.youtube.com/vi/${ytId}/mqdefault.jpg`;
 
-      if (videoRes.status === 'fulfilled' && videoRes.value) {
-        const j = await videoRes.value.json().catch(() => ({}));
-        if (cobaltOk(j))
-          videos.push({ quality: 'MP4 · Video', url: j.url, extension: 'mp4', type: 'video' });
+      /* ── 1. Invidious — obtiene instancias activas en tiempo real ── */
+      let invInstances = ['https://inv.nadeko.net', 'https://invidious.nerdvpn.de']; // fallback hardcoded
+      try {
+        const listRes = await fetch('https://api.invidious.io/instances.json?sort_by=health', {
+          signal: AbortSignal.timeout(5000)
+        });
+        if (listRes.ok) {
+          const list = await listRes.json();
+          // Tomar hasta 5 instancias HTTPS con API habilitada y mayor salud
+          invInstances = list
+            .filter(([, d]) => d.type === 'https' && d.api === true && d.uri)
+            .slice(0, 5)
+            .map(([, d]) => d.uri.replace(/\/$/, ''));
+        }
+      } catch (_) {}
+
+      for (const instance of invInstances) {
+        try {
+          const r = await fetch(`${instance}/api/v1/videos/${ytId}?local=true`, {
+            signal: AbortSignal.timeout(10000)
+          });
+          if (!r.ok) continue;
+          const d = await r.json();
+          if (!d || d.error) continue;
+
+          if (d.title) title = d.title;
+
+          // Thumbnail de mayor resolución disponible
+          const hqThumb = (d.videoThumbnails || []).find(t => t.quality === 'maxresdefault' || t.quality === 'high');
+          if (hqThumb?.url) thumbnail = hqThumb.url.startsWith('/') ? instance + hqThumb.url : hqThumb.url;
+
+          // MP4 combinado (video+audio) — hasta 720p
+          const mp4 = (d.formatStreams || [])
+            .filter(s => s.container === 'mp4' || (s.type || '').includes('video/mp4'))
+            .sort((a, b) => parseInt(b.resolution) - parseInt(a.resolution))[0];
+          if (mp4?.url) videos.push({
+            quality: `MP4 · ${mp4.qualityLabel || mp4.resolution || '720p'}`,
+            url: mp4.url, extension: 'mp4', type: 'video'
+          });
+
+          // Mejor stream de solo audio
+          const audio = (d.adaptiveFormats || [])
+            .filter(s => (s.type || '').startsWith('audio/') && s.url)
+            .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+          if (audio?.url) videos.push({
+            quality: 'MP3 · Solo audio',
+            url: audio.url, extension: 'mp3', type: 'audio'
+          });
+
+          if (videos.length) break; // instancia funcionó, no seguir
+        } catch (_) {}
       }
 
-      if (audioRes.status === 'fulfilled' && audioRes.value) {
-        const j = await audioRes.value.json().catch(() => ({}));
-        if (cobaltOk(j))
-          videos.push({ quality: 'MP3 · Solo audio', url: j.url, extension: 'mp3', type: 'audio' });
+      /* ── 2. Cobalt fallback ── */
+      if (!videos.length) {
+        const COBALT_HDR = { 'Accept': 'application/json', 'Content-Type': 'application/json' };
+        const cobaltFetch = async (body) => {
+          for (const ep of ['https://api.cobalt.tools/', 'https://api.cobalt.tools/api/json']) {
+            try {
+              const r = await fetch(ep, { method: 'POST', headers: COBALT_HDR, body: JSON.stringify(body), signal: AbortSignal.timeout(18000) });
+              if (r.ok) return r;
+            } catch (_) {}
+          }
+          return null;
+        };
+        const cobaltOk = (j) => j?.url && ['redirect','tunnel','stream'].includes(j.status);
+        const [vr, ar] = await Promise.allSettled([
+          cobaltFetch({ url: ytUrl, downloadMode: 'auto',  videoQuality: '1080' }),
+          cobaltFetch({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3'  }),
+        ]);
+        if (vr.status === 'fulfilled' && vr.value) { const j = await vr.value.json().catch(() => ({})); if (cobaltOk(j)) videos.push({ quality: 'MP4 · Video',      url: j.url, extension: 'mp4', type: 'video' }); }
+        if (ar.status === 'fulfilled' && ar.value) { const j = await ar.value.json().catch(() => ({})); if (cobaltOk(j)) videos.push({ quality: 'MP3 · Solo audio', url: j.url, extension: 'mp3', type: 'audio' }); }
       }
 
-      // Fallback: servidor Railway con yt-dlp (si YT_SERVER_URL está configurado en Vercel)
+      /* ── 3. Railway fallback (si YT_SERVER_URL configurado en Vercel) ── */
       if (!videos.length && YT_SERVER) {
         try {
           const r = await fetch(`${YT_SERVER}/info?url=${encodeURIComponent(ytUrl)}`, { signal: AbortSignal.timeout(25000) });
           if (r.ok) {
             const data = await r.json();
-            (data.formats || []).forEach(f => videos.push({
-              quality: f.quality, url: f.stream_url, extension: f.ext,
-              type: f.type === 'audio' ? 'audio' : 'video'
-            }));
+            (data.formats || []).forEach(f => videos.push({ quality: f.quality, url: f.stream_url, extension: f.ext, type: f.type === 'audio' ? 'audio' : 'video' }));
           }
         } catch (_) {}
       }
@@ -92,19 +125,7 @@ export default async function handler(req, res) {
       if (!videos.length)
         return res.status(502).json({ error: 'YouTube no disponible en este momento. Intenta de nuevo en unos segundos.' });
 
-      let title = 'Video de YouTube';
-      if (titleRes.status === 'fulfilled' && titleRes.value.ok) {
-        const tj = await titleRes.value.json().catch(() => ({}));
-        if (tj.title) title = tj.title;
-      }
-
-      return res.status(200).json({
-        title,
-        thumbnail: `https://img.youtube.com/vi/${ytId}/mqdefault.jpg`,
-        platform:  'youtube',
-        downloadUrl: videos[0].url,
-        videos,
-      });
+      return res.status(200).json({ title, thumbnail, platform: 'youtube', downloadUrl: videos[0].url, videos });
     }
 
     /* ── TikTok / Instagram ─────────────────────────────────────────── */
