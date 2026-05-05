@@ -27,47 +27,73 @@ export default async function handler(req, res) {
   }
 
   try {
-    /* ── YouTube — vía servidor Railway con yt-dlp ────────────────────── */
+    /* ── YouTube — vía Cobalt (gratis, sin API key) ───────────────────── */
     if (svc === 'youtube') {
       const ytId = extractYtId(url);
       if (!ytId) return res.status(400).json({ error: 'URL de YouTube inválida.' });
 
-      if (!YT_SERVER) {
-        return res.status(503).json({ error: 'Servidor YT no configurado. Agrega YT_SERVER_URL en Vercel.' });
+      const ytUrl      = `https://www.youtube.com/watch?v=${ytId}`;
+      const COBALT     = 'https://api.cobalt.tools/api/json';
+      const COBALT_HDR = { 'Accept': 'application/json', 'Content-Type': 'application/json' };
+
+      // Pedir MP4, MP3 y título en paralelo para máxima velocidad
+      const [videoRes, audioRes, titleRes] = await Promise.allSettled([
+        fetch(COBALT, {
+          method: 'POST', headers: COBALT_HDR,
+          body: JSON.stringify({ url: ytUrl, downloadMode: 'auto', videoQuality: '1080' }),
+          signal: AbortSignal.timeout(22000)
+        }),
+        fetch(COBALT, {
+          method: 'POST', headers: COBALT_HDR,
+          body: JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3' }),
+          signal: AbortSignal.timeout(22000)
+        }),
+        fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(ytUrl)}&format=json`, {
+          signal: AbortSignal.timeout(5000)
+        })
+      ]);
+
+      const videos = [];
+
+      if (videoRes.status === 'fulfilled' && videoRes.value.ok) {
+        const j = await videoRes.value.json().catch(() => ({}));
+        if ((j.status === 'redirect' || j.status === 'stream') && j.url)
+          videos.push({ quality: 'MP4 · Video', url: j.url, extension: 'mp4', type: 'video' });
       }
 
-      const ytUrl = `https://www.youtube.com/watch?v=${ytId}`;
-
-      let data;
-      try {
-        const r = await fetch(
-          `${YT_SERVER}/info?url=${encodeURIComponent(ytUrl)}`,
-          { signal: AbortSignal.timeout(25000) }
-        );
-        if (!r.ok) {
-          const err = await r.json().catch(() => ({}));
-          return res.status(r.status).json({ error: err.detail || `YT Server error ${r.status}` });
-        }
-        data = await r.json();
-      } catch (e) {
-        return res.status(502).json({ error: `No se pudo conectar al servidor YT: ${e.message}` });
+      if (audioRes.status === 'fulfilled' && audioRes.value.ok) {
+        const j = await audioRes.value.json().catch(() => ({}));
+        if ((j.status === 'redirect' || j.status === 'stream') && j.url)
+          videos.push({ quality: 'MP3 · Solo audio', url: j.url, extension: 'mp3', type: 'audio' });
       }
 
-      const videos = (data.formats || []).map(f => ({
-        quality:   f.quality,
-        url:       f.stream_url,   // URL del /stream del servidor Render
-        extension: f.ext,
-        type:      f.type === 'audio' ? 'audio' : 'video',
-      }));
+      // Fallback: servidor Railway con yt-dlp (si YT_SERVER_URL está configurado en Vercel)
+      if (!videos.length && YT_SERVER) {
+        try {
+          const r = await fetch(`${YT_SERVER}/info?url=${encodeURIComponent(ytUrl)}`, { signal: AbortSignal.timeout(25000) });
+          if (r.ok) {
+            const data = await r.json();
+            (data.formats || []).forEach(f => videos.push({
+              quality: f.quality, url: f.stream_url, extension: f.ext,
+              type: f.type === 'audio' ? 'audio' : 'video'
+            }));
+          }
+        } catch (_) {}
+      }
 
-      if (!videos.length) {
-        return res.status(502).json({ error: 'No se encontraron formatos de descarga.' });
+      if (!videos.length)
+        return res.status(502).json({ error: 'YouTube no disponible en este momento. Intenta de nuevo en unos segundos.' });
+
+      let title = 'Video de YouTube';
+      if (titleRes.status === 'fulfilled' && titleRes.value.ok) {
+        const tj = await titleRes.value.json().catch(() => ({}));
+        if (tj.title) title = tj.title;
       }
 
       return res.status(200).json({
-        title:       data.title,
-        thumbnail:   data.thumbnail,
-        platform:    'youtube',
+        title,
+        thumbnail: `https://img.youtube.com/vi/${ytId}/mqdefault.jpg`,
+        platform:  'youtube',
         downloadUrl: videos[0].url,
         videos,
       });
@@ -107,23 +133,61 @@ export default async function handler(req, res) {
         }
       } catch (_) {}
 
+      // Fallback 2: Cobalt (gratis, sin API key)
       if (!tikOk) {
-        // Fallback: Instagram Reels Downloader API (RapidAPI)
-        const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || '';
-        if (!RAPIDAPI_KEY) return res.status(500).json({ error: 'RAPIDAPI_KEY no configurada.' });
-
-        const rapRes = await fetch(
-          `https://instagram-reels-downloader-api.p.rapidapi.com/download?url=${encodeURIComponent(url)}`,
-          {
-            headers: {
-              'x-rapidapi-key': RAPIDAPI_KEY,
-              'x-rapidapi-host': 'instagram-reels-downloader-api.p.rapidapi.com',
-              'Content-Type': 'application/json'
-            },
-            signal: AbortSignal.timeout(15000)
+        try {
+          const cobaltRes = await fetch('https://api.cobalt.tools/api/json', {
+            method: 'POST',
+            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, downloadMode: 'auto' }),
+            signal: AbortSignal.timeout(12000)
+          });
+          if (cobaltRes.ok) {
+            const cj = await cobaltRes.json();
+            if ((cj.status === 'redirect' || cj.status === 'stream') && cj.url) {
+              title = 'Post de Instagram';
+              videos.push({ quality: 'Descargar MP4', url: cj.url, extension: 'mp4' });
+              tikOk = true;
+            } else if (cj.status === 'picker' && cj.picker?.length) {
+              title = 'Post de Instagram';
+              cj.picker.forEach((item, i) => {
+                videos.push({ quality: `Elemento ${i + 1}`, url: item.url, extension: item.type === 'photo' ? 'jpg' : 'mp4' });
+              });
+              tikOk = true;
+            }
           }
-        );
-        if (!rapRes.ok) return res.status(502).json({ error: `RapidAPI ${rapRes.status}` });
+        } catch (_) {}
+      }
+
+      if (!tikOk) {
+        // Fallback 3: Instagram Reels Downloader API (RapidAPI)
+        const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || '';
+        if (!RAPIDAPI_KEY) return res.status(503).json({ error: 'No se pudo descargar este post. Intenta con otro enlace.' });
+
+        // RapidAPI — hasta 2 intentos si devuelve 5xx
+        let rapRes, rapAttempt = 0;
+        while (rapAttempt < 2) {
+          rapRes = await fetch(
+            `https://instagram-reels-downloader-api.p.rapidapi.com/download?url=${encodeURIComponent(url)}`,
+            {
+              headers: {
+                'x-rapidapi-key': RAPIDAPI_KEY,
+                'x-rapidapi-host': 'instagram-reels-downloader-api.p.rapidapi.com',
+                'Content-Type': 'application/json'
+              },
+              signal: AbortSignal.timeout(15000)
+            }
+          );
+          if (rapRes.ok || rapRes.status < 500) break; // éxito o error cliente → no reintentar
+          rapAttempt++;
+          if (rapAttempt < 2) await new Promise(r => setTimeout(r, 1200)); // espera 1.2s antes de reintentar
+        }
+        if (!rapRes.ok) {
+          const code = rapRes.status;
+          if (code === 429) return res.status(502).json({ error: 'Límite de descargas alcanzado. Intenta en unos minutos.' });
+          if (code >= 500) return res.status(502).json({ error: 'Instagram no está disponible en este momento. Intenta más tarde.' });
+          return res.status(502).json({ error: `No se pudo descargar este post (${code}).` });
+        }
         const rapJson = await rapRes.json();
         if (!rapJson.success || !rapJson.data) return res.status(502).json({ error: rapJson.message || 'Sin datos.' });
 
@@ -153,6 +217,11 @@ export default async function handler(req, res) {
 
   } catch (err) {
     console.error('[download]', err?.message);
-    return res.status(500).json({ error: err?.message || 'Error interno.' });
+    const msg = err?.message || 'Error interno.';
+    // Evitar mensajes técnicos crudos al usuario
+    if (msg.includes('fetch') || msg.includes('network') || msg.includes('ECONNRESET')) {
+      return res.status(500).json({ error: 'Error de conexión al descargar. Intenta de nuevo.' });
+    }
+    return res.status(500).json({ error: msg });
   }
 }
