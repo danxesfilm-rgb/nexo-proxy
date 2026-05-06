@@ -325,6 +325,22 @@ export default async function handler(req, res) {
         } catch (_) {}
       }
 
+      // Fallback 5: Render /embed — URL directa del CDN de Instagram (sin proxying por servidor)
+      if (!tikOk && YT_SERVER && igShortcode) {
+        try {
+          const r = await fetch(`${YT_SERVER}/embed?url=${encodeURIComponent(igUrl)}`, { signal: AbortSignal.timeout(20000) });
+          if (r.ok) {
+            const data = await r.json();
+            if (data.video_url) {
+              videos.push({ quality: 'MP4 Original', url: data.video_url, extension: 'mp4', type: 'video' });
+              tikOk = true;
+              if (!title && data.title) title = data.title;
+              if (!thumbnail && data.thumbnail) thumbnail = data.thumbnail;
+            }
+          }
+        } catch (_) {}
+      }
+
       // Fallback 6: servidor yt-dlp (Render) — soporta Instagram nativamente
       if (!tikOk && YT_SERVER) {
         try {
