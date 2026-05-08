@@ -76,42 +76,57 @@ export default async function handler(req, res) {
         'Content-Type':    'application/json'
       };
 
-      /* ── 1. RapidAPI HD Video Downloader — primario ── */
+      /* ── 1. RapidAPI (video) + Cobalt (audio) — en paralelo ── */
       try {
-        // Obtener info + formatos disponibles
-        const infoRes = await fetch(
-          `https://${RAPIDAPI_HOST}/info?url=${encodeURIComponent(ytUrl)}`,
-          { headers: rapidHeaders, signal: AbortSignal.timeout(12000) }
-        );
-        if (infoRes.ok) {
-          const info = await infoRes.json();
-          if (info.success && info.data) {
-            title = info.data.title || title;
-            // Descargar en paralelo: 1080p + 720p + audio
-            const wantedQualities = ['1080', '720', 'audio'];
-            const dlResults = await Promise.allSettled(
-              wantedQualities.map(q =>
-                fetch(`https://${RAPIDAPI_HOST}/download?url=${encodeURIComponent(ytUrl)}&quality=${q}`,
-                  { headers: rapidHeaders, signal: AbortSignal.timeout(15000) }
-                ).then(r => r.ok ? r.json() : null)
-              )
-            );
-            const qualityLabels = { '1080': 'MP4 · 1080p HD', '720': 'MP4 · 720p HD', 'audio': 'MP3 · Solo audio' };
-            const qualityExts   = { '1080': 'mp4', '720': 'mp4', 'audio': 'mp3' };
-            const qualityTypes  = { '1080': 'video', '720': 'video', 'audio': 'audio' };
-            dlResults.forEach((res, i) => {
-              if (res.status === 'fulfilled' && res.value?.success && res.value?.data?.download_url) {
-                const q = wantedQualities[i];
-                videos.push({
-                  quality:   qualityLabels[q],
-                  url:       res.value.data.download_url,
-                  extension: qualityExts[q],
-                  type:      qualityTypes[q],
-                  size:      res.value.data.filesize || 0
-                });
-              }
-            });
-          }
+        // RapidAPI solo soporta video (no audio). Cobalt se usa para MP3.
+        const COBALT_HDR = { 'Accept': 'application/json', 'Content-Type': 'application/json' };
+
+        const [infoRes, audioRes] = await Promise.allSettled([
+          // RapidAPI: info del video
+          fetch(`https://${RAPIDAPI_HOST}/info?url=${encodeURIComponent(ytUrl)}`,
+            { headers: rapidHeaders, signal: AbortSignal.timeout(12000) }
+          ).then(r => r.ok ? r.json() : null),
+          // Cobalt: audio MP3
+          fetch('https://api.cobalt.tools/', {
+            method: 'POST', headers: COBALT_HDR,
+            body: JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3' }),
+            signal: AbortSignal.timeout(15000)
+          }).then(r => r.ok ? r.json() : null).catch(() => null)
+        ]);
+
+        // Procesar info de RapidAPI
+        const info = infoRes.status === 'fulfilled' ? infoRes.value : null;
+        if (info?.success && info?.data) {
+          title = info.data.title || title;
+          // Descargar 1080p + 720p en paralelo
+          const dlResults = await Promise.allSettled(
+            ['1080', '720'].map(q =>
+              fetch(`https://${RAPIDAPI_HOST}/download?url=${encodeURIComponent(ytUrl)}&quality=${q}`,
+                { headers: rapidHeaders, signal: AbortSignal.timeout(15000) }
+              ).then(r => r.ok ? r.json() : null)
+            )
+          );
+          const qualityMap = [
+            { label: 'MP4 · 1080p HD', ext: 'mp4', type: 'video' },
+            { label: 'MP4 · 720p HD',  ext: 'mp4', type: 'video' }
+          ];
+          dlResults.forEach((res, i) => {
+            if (res.status === 'fulfilled' && res.value?.success && res.value?.data?.download_url) {
+              videos.push({
+                quality:   qualityMap[i].label,
+                url:       res.value.data.download_url,
+                extension: qualityMap[i].ext,
+                type:      qualityMap[i].type,
+                size:      res.value.data.filesize || 0
+              });
+            }
+          });
+        }
+
+        // Procesar audio de Cobalt
+        const audioData = audioRes.status === 'fulfilled' ? audioRes.value : null;
+        if (audioData?.url && ['redirect','tunnel','stream'].includes(audioData.status)) {
+          videos.push({ quality: 'MP3 · Solo audio', url: audioData.url, extension: 'mp3', type: 'audio' });
         }
       } catch (_) {}
 
@@ -276,7 +291,40 @@ export default async function handler(req, res) {
       const igShortcode = url.match(/\/(p|reel|tv|reels)\/([A-Za-z0-9_-]+)/)?.[2];
       const igUrl = igShortcode ? `https://www.instagram.com/reel/${igShortcode}/` : url;
 
-      // Fallback 2: Cobalt — instancias múltiples (oficial + comunitarias, IPs distintas)
+      // Fallback 2b: ddInstagram — proxy público que expone la URL del CDN de Instagram
+      if (!tikOk && igShortcode) {
+        try {
+          // ddInstagram redirige instagram.com/reel/X → ddinstagram.com/reel/X y muestra el video
+          const ddRes = await fetch(
+            `https://www.ddinstagram.com/reel/${igShortcode}/`,
+            {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+                'Accept': 'text/html,application/xhtml+xml',
+              },
+              signal: AbortSignal.timeout(10000),
+              redirect: 'follow'
+            }
+          );
+          if (ddRes.ok) {
+            const html = await ddRes.text();
+            const videoMatch = html.match(/<meta[^>]+property=["']og:video["'][^>]+content=["']([^"']+)["']/i)
+              || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:video["']/i)
+              || html.match(/content=["'](https:\/\/[^"']+\.mp4[^"']*)/i);
+            if (videoMatch) {
+              const videoUrl = videoMatch[1].replace(/&amp;/g, '&');
+              const thumbMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+                || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+              if (thumbMatch && !thumbnail) thumbnail = thumbMatch[1].replace(/&amp;/g, '&');
+              title = title || 'Reel de Instagram';
+              videos.push({ quality: 'MP4 Original', url: videoUrl, extension: 'mp4' });
+              tikOk = true;
+            }
+          }
+        } catch (_) {}
+      }
+
+      // Fallback 2c: Cobalt — instancias múltiples (oficial + comunitarias, IPs distintas)
       if (!tikOk) {
         try {
           // Obtener instancias comunitarias activas en tiempo real
