@@ -284,7 +284,8 @@ export default async function handler(req, res) {
             if (!title || /^instagram_[A-Za-z0-9_-]+$/i.test(title)) {
               title = 'Post de Instagram';
             }
-            videos.push({ quality: dlData.data.quality || 'MP4', url: dlData.data.download_url, extension: dlData.data.ext || 'mp4' });
+            // No confiar en la calidad reportada por la API (suele ser incorrecta para Instagram)
+            videos.push({ quality: 'Calidad original', url: dlData.data.download_url, extension: dlData.data.ext || 'mp4' });
             tikOk = true;
           }
         }
