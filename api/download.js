@@ -76,58 +76,43 @@ export default async function handler(req, res) {
         'Content-Type':    'application/json'
       };
 
-      /* ── 1. RapidAPI (video) + Cobalt (audio) — en paralelo ── */
+      /* ── 1. RapidAPI HD Video Downloader — 1080p + 720p + 480p en paralelo ── */
       try {
-        // RapidAPI solo soporta video (no audio). Cobalt se usa para MP3.
-        const COBALT_HDR = { 'Accept': 'application/json', 'Content-Type': 'application/json' };
-
-        const [infoRes, audioRes] = await Promise.allSettled([
-          // RapidAPI: info del video
-          fetch(`https://${RAPIDAPI_HOST}/info?url=${encodeURIComponent(ytUrl)}`,
-            { headers: rapidHeaders, signal: AbortSignal.timeout(12000) }
-          ).then(r => r.ok ? r.json() : null),
-          // Cobalt: audio MP3
-          fetch('https://api.cobalt.tools/', {
-            method: 'POST', headers: COBALT_HDR,
-            body: JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3' }),
-            signal: AbortSignal.timeout(15000)
-          }).then(r => r.ok ? r.json() : null).catch(() => null)
-        ]);
-
-        // Procesar info de RapidAPI
-        const info = infoRes.status === 'fulfilled' ? infoRes.value : null;
-        if (info?.success && info?.data) {
-          title = info.data.title || title;
-          // Descargar 1080p + 720p en paralelo
-          const dlResults = await Promise.allSettled(
-            ['1080', '720'].map(q =>
-              fetch(`https://${RAPIDAPI_HOST}/download?url=${encodeURIComponent(ytUrl)}&quality=${q}`,
-                { headers: rapidHeaders, signal: AbortSignal.timeout(15000) }
-              ).then(r => r.ok ? r.json() : null)
-            )
-          );
-          const qualityMap = [
-            { label: 'MP4 · 1080p HD', ext: 'mp4', type: 'video' },
-            { label: 'MP4 · 720p HD',  ext: 'mp4', type: 'video' }
-          ];
-          dlResults.forEach((res, i) => {
-            if (res.status === 'fulfilled' && res.value?.success && res.value?.data?.download_url) {
-              videos.push({
-                quality:   qualityMap[i].label,
-                url:       res.value.data.download_url,
-                extension: qualityMap[i].ext,
-                type:      qualityMap[i].type,
-                size:      res.value.data.filesize || 0
-              });
-            }
-          });
+        // Primero obtener título del video
+        const infoRes = await fetch(
+          `https://${RAPIDAPI_HOST}/info?url=${encodeURIComponent(ytUrl)}`,
+          { headers: rapidHeaders, signal: AbortSignal.timeout(10000) }
+        );
+        if (infoRes.ok) {
+          const info = await infoRes.json();
+          if (info?.success && info?.data?.title) title = info.data.title;
         }
 
-        // Procesar audio de Cobalt
-        const audioData = audioRes.status === 'fulfilled' ? audioRes.value : null;
-        if (audioData?.url && ['redirect','tunnel','stream'].includes(audioData.status)) {
-          videos.push({ quality: 'MP3 · Solo audio', url: audioData.url, extension: 'mp3', type: 'audio' });
-        }
+        // Descargar calidades en paralelo (1080p, 720p, 480p)
+        const dlResults = await Promise.allSettled(
+          ['1080', '720', '480'].map(q =>
+            fetch(`https://${RAPIDAPI_HOST}/download?url=${encodeURIComponent(ytUrl)}&quality=${q}`,
+              { headers: rapidHeaders, signal: AbortSignal.timeout(15000) }
+            ).then(r => r.ok ? r.json() : null)
+          )
+        );
+        const qualityMap = [
+          { label: 'MP4 · 1080p HD', ext: 'mp4', type: 'video' },
+          { label: 'MP4 · 720p HD',  ext: 'mp4', type: 'video' },
+          { label: 'MP4 · 480p',     ext: 'mp4', type: 'video' }
+        ];
+        dlResults.forEach((res, i) => {
+          if (res.status === 'fulfilled' && res.value?.success && res.value?.data?.download_url) {
+            videos.push({
+              quality:   qualityMap[i].label,
+              url:       res.value.data.download_url,
+              extension: qualityMap[i].ext,
+              type:      qualityMap[i].type,
+              size:      res.value.data.filesize || 0,
+              badges:    [{ text: qualityMap[i].label.split(' · ')[1], type: i === 0 ? 'good' : 'info' }]
+            });
+          }
+        });
       } catch (_) {}
 
       /* ── 2. Invidious fallback ── */
