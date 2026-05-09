@@ -238,19 +238,54 @@ export default async function handler(req, res) {
           }
         }
 
-        // 2. /download directo si /info no dio formatos
+        // 2. /download directo + embed metadata en paralelo
         if (!tikOk) {
-          const dlRes = await fetch(
-            `https://${RAPIDAPI_HOST}/download?url=${encodeURIComponent(igUrlMain)}&quality=720`,
-            { headers: rapidHeaders, signal: AbortSignal.timeout(12000) }
-          );
-          if (dlRes.ok) {
-            const dlData = await dlRes.json();
-            if (dlData.success && dlData.data?.download_url) {
-              title     = title || dlData.data.title || 'Post de Instagram';
-              videos.push({ quality: '720p', url: dlData.data.download_url, extension: dlData.data.ext || 'mp4' });
-              tikOk = true;
+          const [dlRes, embedRes] = await Promise.allSettled([
+            fetch(
+              `https://${RAPIDAPI_HOST}/download?url=${encodeURIComponent(igUrlMain)}&quality=720`,
+              { headers: rapidHeaders, signal: AbortSignal.timeout(12000) }
+            ).then(r => r.ok ? r.json() : null),
+            // Embed de Instagram para obtener título y miniatura reales
+            igShortcodeMain ? fetch(
+              `https://www.instagram.com/p/${igShortcodeMain}/embed/captioned/`,
+              {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+                  'Accept': 'text/html,application/xhtml+xml',
+                  'Accept-Language': 'es-ES,es;q=0.9',
+                },
+                signal: AbortSignal.timeout(8000)
+              }
+            ).then(r => r.ok ? r.text() : null) : Promise.resolve(null)
+          ]);
+
+          // Procesar metadatos del embed
+          const embedHtml = embedRes.status === 'fulfilled' ? embedRes.value : null;
+          if (embedHtml) {
+            const thumbMatch = embedHtml.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+              || embedHtml.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+            if (thumbMatch) thumbnail = thumbMatch[1].replace(/\\u0026/g, '&').replace(/\\/g, '');
+
+            const descMatch = embedHtml.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i)
+              || embedHtml.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i);
+            if (descMatch) {
+              const cleanTitle = descMatch[1].replace(/ on Instagram.*$/i,'').replace(/["']/g,'').trim();
+              if (cleanTitle) title = cleanTitle;
+            } else {
+              const titleMatch = embedHtml.match(/<title>([^<]+)<\/title>/);
+              if (titleMatch) title = titleMatch[1].replace(/ [•·|].* Instagram.*/i,'').trim();
             }
+          }
+
+          // Procesar URL de descarga
+          const dlData = dlRes.status === 'fulfilled' ? dlRes.value : null;
+          if (dlData?.success && dlData?.data?.download_url) {
+            // Limpiar título basura tipo "instagram_SHORTCODE"
+            if (!title || /^instagram_[A-Za-z0-9_-]+$/i.test(title)) {
+              title = 'Post de Instagram';
+            }
+            videos.push({ quality: dlData.data.quality || 'MP4', url: dlData.data.download_url, extension: dlData.data.ext || 'mp4' });
+            tikOk = true;
           }
         }
       } catch (_) {}
