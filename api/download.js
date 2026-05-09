@@ -229,7 +229,7 @@ export default async function handler(req, res) {
                 if (dlRes.ok) {
                   const dlData = await dlRes.json();
                   if (dlData.success && dlData.data?.download_url) {
-                    videos.push({ quality: best.quality || 'MP4', url: dlData.data.download_url, extension: 'mp4' });
+                    videos.push({ quality: 'Calidad original', url: dlData.data.download_url, extension: 'mp4' });
                     tikOk = true;
                   }
                 }
