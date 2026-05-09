@@ -76,40 +76,41 @@ export default async function handler(req, res) {
         'Content-Type':    'application/json'
       };
 
-      /* ── 1. RapidAPI HD Video Downloader — 1080p + 720p + 480p en paralelo ── */
+      /* ── 1. RapidAPI HD Video Downloader — info + 1080p + 720p en paralelo ── */
       try {
-        // Primero obtener título del video
-        const infoRes = await fetch(
-          `https://${RAPIDAPI_HOST}/info?url=${encodeURIComponent(ytUrl)}`,
-          { headers: rapidHeaders, signal: AbortSignal.timeout(10000) }
-        );
-        if (infoRes.ok) {
-          const info = await infoRes.json();
-          if (info?.success && info?.data?.title) title = info.data.title;
-        }
+        const qualityMap = [
+          { q: '1080', label: 'MP4 · 1080p HD', ext: 'mp4', type: 'video', badge: 'good' },
+          { q: '720',  label: 'MP4 · 720p HD',  ext: 'mp4', type: 'video', badge: 'info' },
+        ];
 
-        // Descargar calidades en paralelo (1080p, 720p, 480p)
-        const dlResults = await Promise.allSettled(
-          ['1080', '720', '480'].map(q =>
+        // info + descargas todo en paralelo para minimizar tiempo total
+        const [infoResult, ...dlResults] = await Promise.allSettled([
+          fetch(`https://${RAPIDAPI_HOST}/info?url=${encodeURIComponent(ytUrl)}`,
+            { headers: rapidHeaders, signal: AbortSignal.timeout(12000) }
+          ).then(r => r.ok ? r.json() : null),
+          ...qualityMap.map(({ q }) =>
             fetch(`https://${RAPIDAPI_HOST}/download?url=${encodeURIComponent(ytUrl)}&quality=${q}`,
-              { headers: rapidHeaders, signal: AbortSignal.timeout(15000) }
+              { headers: rapidHeaders, signal: AbortSignal.timeout(20000) }
             ).then(r => r.ok ? r.json() : null)
           )
-        );
-        const qualityMap = [
-          { label: 'MP4 · 1080p HD', ext: 'mp4', type: 'video' },
-          { label: 'MP4 · 720p HD',  ext: 'mp4', type: 'video' },
-          { label: 'MP4 · 480p',     ext: 'mp4', type: 'video' }
-        ];
+        ]);
+
+        // Título desde /info
+        const info = infoResult.status === 'fulfilled' ? infoResult.value : null;
+        if (info?.success && info?.data?.title) title = info.data.title;
+
+        // URLs de descarga
         dlResults.forEach((res, i) => {
-          if (res.status === 'fulfilled' && res.value?.success && res.value?.data?.download_url) {
+          const d = res.status === 'fulfilled' ? res.value : null;
+          if (d?.success && d?.data?.download_url) {
+            const qm = qualityMap[i];
             videos.push({
-              quality:   qualityMap[i].label,
-              url:       res.value.data.download_url,
-              extension: qualityMap[i].ext,
-              type:      qualityMap[i].type,
-              size:      res.value.data.filesize || 0,
-              badges:    [{ text: qualityMap[i].label.split(' · ')[1], type: i === 0 ? 'good' : 'info' }]
+              quality:   qm.label,
+              url:       d.data.download_url,
+              extension: qm.ext,
+              type:      qm.type,
+              size:      d.data.filesize || 0,
+              badges:    [{ text: qm.label.split(' · ')[1], type: qm.badge }]
             });
           }
         });
