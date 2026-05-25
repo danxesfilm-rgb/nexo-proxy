@@ -54,6 +54,7 @@ def _load_cookies(env_var: str) -> str | None:
         tmp = tempfile.NamedTemporaryFile(
             mode="w", suffix=".txt", delete=False, prefix=f"{env_var.lower()}_"
         )
+        content = content.replace('\r\n', '\n')  # Windows → Unix line endings
         tmp.write(content); tmp.flush(); tmp.close()
         print(f"[cookies] {env_var} cargado → {tmp.name}")
         return tmp.name
@@ -160,7 +161,8 @@ def _yt_info(url: str) -> dict:
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
-        "extractor_args": {"youtube": {"player_client": ["web", "mweb"]}},
+        # ios y web_embedded sortean mejor la detección desde datacenter
+        "extractor_args": {"youtube": {"player_client": ["ios", "web_embedded", "web"]}},
     }
     if _YT_COOKIES_FILE:
         opts["cookiefile"] = _YT_COOKIES_FILE
