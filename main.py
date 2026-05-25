@@ -78,7 +78,12 @@ atexit.register(_cleanup)
 @app.get("/")
 @app.get("/health")
 def health():
-    return {"status": "ok", "engine": "yt-dlp"}
+    return {
+        "status": "ok",
+        "engine": "yt-dlp",
+        "ig_cookies": bool(_IG_COOKIES_FILE),
+        "yt_cookies": bool(_YT_COOKIES_FILE),
+    }
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -151,7 +156,12 @@ _YT_LABELS   = {2160: "4K 2160p", 1440: "1440p 2K", 1080: "1080p",
                 720: "720p", 480: "480p", 360: "360p"}
 
 def _yt_info(url: str) -> dict:
-    opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "extractor_args": {"youtube": {"player_client": ["web", "mweb"]}},
+    }
     if _YT_COOKIES_FILE:
         opts["cookiefile"] = _YT_COOKIES_FILE
     info = _extract(url, opts)
