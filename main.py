@@ -42,33 +42,33 @@ _MOBILE_UA = (
 # ─── Regex para limpiar títulos autogenerados de Instagram ─────────────────
 _IG_TITLE_RE = re.compile(r'^instagram_[A-Za-z0-9_\-]+$', re.IGNORECASE)
 
-# ─── Cookies de Instagram (base64 de un cookies.txt de Netscape) ───────────
-# Render env var: IG_COOKIES_B64
-_IG_COOKIES_FILE: str | None = None
+# ─── Cookies (base64 de cookies.txt Netscape) ─────────────────────────────
+# Render env vars: IG_COOKIES_B64  y  YT_COOKIES_B64
 
-def _init_cookies():
-    global _IG_COOKIES_FILE
-    b64 = os.environ.get("IG_COOKIES_B64", "").strip()
+def _load_cookies(env_var: str) -> str | None:
+    b64 = os.environ.get(env_var, "").strip()
     if not b64:
-        return
+        return None
     try:
         content = base64.b64decode(b64).decode("utf-8")
         tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False, prefix="ig_cookies_"
+            mode="w", suffix=".txt", delete=False, prefix=f"{env_var.lower()}_"
         )
-        tmp.write(content)
-        tmp.flush()
-        tmp.close()
-        _IG_COOKIES_FILE = tmp.name
-        print(f"[cookies] Instagram cookies cargadas desde IG_COOKIES_B64 → {tmp.name}")
+        tmp.write(content); tmp.flush(); tmp.close()
+        print(f"[cookies] {env_var} cargado → {tmp.name}")
+        return tmp.name
     except Exception as e:
-        print(f"[cookies] Error al cargar IG_COOKIES_B64: {e}")
+        print(f"[cookies] Error cargando {env_var}: {e}")
+        return None
 
-_init_cookies()
+_IG_COOKIES_FILE: str | None = _load_cookies("IG_COOKIES_B64")
+_YT_COOKIES_FILE: str | None = _load_cookies("YT_COOKIES_B64")
 
 def _cleanup():
-    if _IG_COOKIES_FILE and os.path.exists(_IG_COOKIES_FILE):
-        os.unlink(_IG_COOKIES_FILE)
+    for f in [_IG_COOKIES_FILE, _YT_COOKIES_FILE]:
+        if f and os.path.exists(f):
+            try: os.unlink(f)
+            except: pass
 
 atexit.register(_cleanup)
 
@@ -152,6 +152,8 @@ _YT_LABELS   = {2160: "4K 2160p", 1440: "1440p 2K", 1080: "1080p",
 
 def _yt_info(url: str) -> dict:
     opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    if _YT_COOKIES_FILE:
+        opts["cookiefile"] = _YT_COOKIES_FILE
     info = _extract(url, opts)
 
     title     = info.get("title", "Video de YouTube")
