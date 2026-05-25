@@ -531,7 +531,8 @@ export default async function handler(req, res) {
       downloadUrl: videos[0].url,
       videos
     };
-    setCache(url, svc, result);
+    // Solo cachear YouTube — las URLs de Instagram/TikTok (RapidAPI CDN) expiran en ~10 min
+    if (svc === 'youtube') setCache(url, svc, result);
     return res.status(200).json(result);
 
   } catch (err) {
