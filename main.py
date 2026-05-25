@@ -17,9 +17,11 @@ import re
 import base64
 import tempfile
 import atexit
+import httpx
 import yt_dlp
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 app = FastAPI(title="NEXO yt-dlp Server", version="2.0")
 
@@ -77,6 +79,35 @@ atexit.register(_cleanup)
 @app.get("/health")
 def health():
     return {"status": "ok", "engine": "yt-dlp"}
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# /thumb  — Proxy de miniaturas con headers de Instagram
+# Uso: /thumb?url=https://scontent.cdninstagram.com/...
+# ───────────────────────────────────────────────────────────────────────────
+@app.get("/thumb")
+async def proxy_thumb(url: str = Query(...)):
+    headers = {
+        "User-Agent":      _MOBILE_UA,
+        "Referer":         "https://www.instagram.com/",
+        "Accept":          "image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.9",
+    }
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=12) as client:
+            r = await client.get(url, headers=headers)
+            if r.status_code >= 400:
+                raise HTTPException(status_code=r.status_code, detail="Imagen no disponible")
+            ctype = r.headers.get("content-type", "image/jpeg")
+            return Response(
+                content=r.content,
+                media_type=ctype,
+                headers={"Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*"},
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"No se pudo obtener la imagen: {e}")
 
 
 # ───────────────────────────────────────────────────────────────────────────
