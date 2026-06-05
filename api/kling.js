@@ -37,9 +37,10 @@ export default async function handler(req, res){
   try{
     /* ── POLLING ── (re-firma en el servidor; no se expone token) */
     if(req.method === 'GET'){
-      const { taskId } = req.query;
+      const { taskId, kind } = req.query;
       if(!taskId) return res.status(400).json({ error:'Falta taskId' });
-      const r = await fetch(`${KLING_BASE}/v1/videos/text2video/${taskId}`, {
+      const ep = kind === 'image2video' ? 'image2video' : 'text2video';
+      const r = await fetch(`${KLING_BASE}/v1/videos/${ep}/${taskId}`, {
         headers:{ Authorization:`Bearer ${signJWT()}` }
       });
       const d = await r.json();
@@ -56,25 +57,26 @@ export default async function handler(req, res){
 
     /* ── START ── */
     if(req.method === 'POST'){
-      const { prompt, aspectRatio, duration } = req.body || {};
+      const { prompt, aspectRatio, duration, image } = req.body || {};
       if(!prompt) return res.status(400).json({ error:'Falta el prompt' });
 
-      const r = await fetch(`${KLING_BASE}/v1/videos/text2video`, {
+      const useImg = !!image;
+      const ep = useImg ? 'image2video' : 'text2video';
+      const body = useImg
+        // imagen-a-video: el formato lo marca la imagen (no se envía aspect_ratio)
+        ? { model_name: KLING_MODEL, image, prompt, duration: String(duration || 5), mode: 'std' }
+        : { model_name: KLING_MODEL, prompt, aspect_ratio: aspectRatio || '16:9', duration: String(duration || 5), mode: 'std' };
+
+      const r = await fetch(`${KLING_BASE}/v1/videos/${ep}`, {
         method:'POST',
         headers:{ Authorization:`Bearer ${signJWT()}`, 'Content-Type':'application/json' },
-        body: JSON.stringify({
-          model_name: KLING_MODEL,                 // Kling 2.5
-          prompt,
-          aspect_ratio: aspectRatio || '16:9',
-          duration: String(duration || 5),
-          mode: 'std'                              // std = 720p (sin audio por defecto)
-        })
+        body: JSON.stringify(body)
       });
       const d = await r.json();
       if(!r.ok) return res.status(r.status).json({ error: d.message || ('Kling '+r.status) });
       const taskId = d.data?.task_id;
       if(!taskId) return res.status(502).json({ error:'Kling no devolvió task_id' });
-      return res.status(200).json({ taskId });
+      return res.status(200).json({ taskId, kind: ep });
     }
 
     return res.status(405).json({ error:'Method not allowed' });
