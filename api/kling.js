@@ -61,15 +61,16 @@ export default async function handler(req, res){
 
     /* ── START ── */
     if(req.method === 'POST'){
-      const { prompt, aspectRatio, duration, image } = req.body || {};
+      const { prompt, aspectRatio, duration, image, mode } = req.body || {};
       if(!prompt) return res.status(400).json({ error:'Falta el prompt' });
 
+      const klingMode = mode === 'pro' ? 'pro' : 'std';   // pro = 1080p, std = 720p
       const useImg = !!image;
       const ep = useImg ? 'image2video' : 'text2video';
       const body = useImg
         // imagen-a-video: el formato lo marca la imagen (no se envía aspect_ratio)
-        ? { model_name: KLING_MODEL, image, prompt, duration: String(duration || 5), mode: 'std' }
-        : { model_name: KLING_MODEL, prompt, aspect_ratio: aspectRatio || '16:9', duration: String(duration || 5), mode: 'std' };
+        ? { model_name: KLING_MODEL, image, prompt, duration: String(duration || 5), mode: klingMode }
+        : { model_name: KLING_MODEL, prompt, aspect_ratio: aspectRatio || '16:9', duration: String(duration || 5), mode: klingMode };
 
       const r = await fetch(`${KLING_BASE}/v1/videos/${ep}`, {
         method:'POST',
