@@ -63,12 +63,11 @@ export default async function handler(req, res){
         method:'POST',
         headers:{ Authorization:`Bearer ${signJWT()}`, 'Content-Type':'application/json' },
         body: JSON.stringify({
-          model_name: KLING_MODEL,                 // Kling 2.5 fijo
+          model_name: KLING_MODEL,                 // Kling 2.5
           prompt,
           aspect_ratio: aspectRatio || '16:9',
           duration: String(duration || 5),
-          mode: 'std',                             // std = 720p
-          sound: false                             // sonido desactivado
+          mode: 'std'                              // std = 720p (sin audio por defecto)
         })
       });
       const d = await r.json();
