@@ -20,6 +20,9 @@
     },
     "api/kling.js": {
       "maxDuration": 60
+    },
+    "api/dl.js": {
+      "maxDuration": 60
     }
   }
 }
