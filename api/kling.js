@@ -11,8 +11,8 @@ import crypto from 'crypto';
 const KLING_BASE  = process.env.KLING_BASE || 'https://api-singapore.klingai.com';
 const ACCESS_KEY  = process.env.KLING_ACCESS_KEY;
 const SECRET_KEY  = process.env.KLING_SECRET_KEY;
-// Bloqueado a Kling 2.5
-const KLING_MODEL = 'kling-v2-5-turbo-pro';
+// Kling 2.5 (id oficial: kling-v2-5-turbo). Sobreescribible con env KLING_MODEL.
+const KLING_MODEL = process.env.KLING_MODEL || 'kling-v2-5-turbo';
 
 function b64url(buf){
   return Buffer.from(buf).toString('base64').replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
