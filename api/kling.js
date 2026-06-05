@@ -48,7 +48,11 @@ export default async function handler(req, res){
       const data = d.data || {};
       const st = data.task_status; // submitted | processing | succeed | failed
       if(st === 'succeed'){
-        const url = data.task_result?.videos?.[0]?.url;
+        const rawUrl = data.task_result?.videos?.[0]?.url;
+        // Envolver en /api/dl para evitar CORS y URLs expiradas al reproducir
+        const proto = req.headers['x-forwarded-proto'] || 'https';
+        const host  = req.headers.host;
+        const url   = `${proto}://${host}/api/dl?url=${encodeURIComponent(rawUrl)}&name=kling-nexo.mp4`;
         return res.status(200).json({ status:'done', url, dur:'5s' });
       }
       if(st === 'failed') return res.status(200).json({ status:'failed', error: data.task_status_msg || 'Render fallido' });
