@@ -8,6 +8,18 @@
     },
     "api/download.js": {
       "maxDuration": 60
+    },
+    "api/nanobanana.js": {
+      "maxDuration": 60
+    },
+    "api/veo.js": {
+      "maxDuration": 60
+    },
+    "api/seedance.js": {
+      "maxDuration": 60
+    },
+    "api/kling.js": {
+      "maxDuration": 60
     }
   }
 }
