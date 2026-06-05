@@ -11,8 +11,9 @@ import crypto from 'crypto';
 const KLING_BASE  = process.env.KLING_BASE || 'https://api-singapore.klingai.com';
 const ACCESS_KEY  = process.env.KLING_ACCESS_KEY;
 const SECRET_KEY  = process.env.KLING_SECRET_KEY;
-// Kling 2.5 (id oficial: kling-v2-5-turbo). Sobreescribible con env KLING_MODEL.
-const KLING_MODEL = process.env.KLING_MODEL || 'kling-v2-5-turbo';
+// Modelos permitidos (whitelist). El cliente elige entre estos; cualquier otro → 2.5 turbo.
+const ALLOWED_MODELS = ['kling-v2-5-turbo', 'kling-v2-6'];
+const DEFAULT_MODEL  = process.env.KLING_MODEL || 'kling-v2-5-turbo';
 
 function b64url(buf){
   return Buffer.from(buf).toString('base64').replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
@@ -61,16 +62,17 @@ export default async function handler(req, res){
 
     /* ── START ── */
     if(req.method === 'POST'){
-      const { prompt, aspectRatio, duration, image, mode } = req.body || {};
+      const { prompt, aspectRatio, duration, image, mode, model } = req.body || {};
       if(!prompt) return res.status(400).json({ error:'Falta el prompt' });
 
+      const modelName = ALLOWED_MODELS.includes(model) ? model : DEFAULT_MODEL;
       const klingMode = mode === 'pro' ? 'pro' : 'std';   // pro = 1080p, std = 720p
       const useImg = !!image;
       const ep = useImg ? 'image2video' : 'text2video';
       const body = useImg
         // imagen-a-video: el formato lo marca la imagen (no se envía aspect_ratio)
-        ? { model_name: KLING_MODEL, image, prompt, duration: String(duration || 5), mode: klingMode }
-        : { model_name: KLING_MODEL, prompt, aspect_ratio: aspectRatio || '16:9', duration: String(duration || 5), mode: klingMode };
+        ? { model_name: modelName, image, prompt, duration: String(duration || 5), mode: klingMode }
+        : { model_name: modelName, prompt, aspect_ratio: aspectRatio || '16:9', duration: String(duration || 5), mode: klingMode };
 
       const r = await fetch(`${KLING_BASE}/v1/videos/${ep}`, {
         method:'POST',
