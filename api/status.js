@@ -12,5 +12,6 @@ export default function handler(req, res){
     gemini:   !!process.env.GEMINI_API_KEY,
     seedance: !!process.env.SEEDANCE_KEY,
     kling:    !!(process.env.KLING_ACCESS_KEY && process.env.KLING_SECRET_KEY),
+    cleanup:  !!process.env.REPLICATE_API_TOKEN,
   });
 }

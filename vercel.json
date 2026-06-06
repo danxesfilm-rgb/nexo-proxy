@@ -23,6 +23,9 @@
     },
     "api/dl.js": {
       "maxDuration": 60
+    },
+    "api/cleanup.js": {
+      "maxDuration": 60
     }
   }
 }
