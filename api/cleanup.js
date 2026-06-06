@@ -6,7 +6,8 @@
    - Modelo configurable con env REPLICATE_LAMA_MODEL (owner/name)
    ============================================================ */
 const TOKEN = process.env.REPLICATE_API_TOKEN;
-const MODEL = process.env.REPLICATE_LAMA_MODEL || 'zylim0702/remove-object';
+// Versión del modelo LaMa (zylim0702/remove-object). Sobreescribible con env REPLICATE_LAMA_VERSION.
+const VERSION = process.env.REPLICATE_LAMA_VERSION || '0e3a841c913f597c1e4c321560aa69e2bc1f15c65f8c366caafc379240efd8ba';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -22,11 +23,11 @@ export default async function handler(req, res){
     const { image, mask } = req.body || {};
     if(!image || !mask) return res.status(400).json({ error:'Faltan image o mask' });
 
-    // Lanza la predicción usando la última versión del modelo (Prefer: wait → espera hasta ~60s)
-    const r = await fetch(`https://api.replicate.com/v1/models/${MODEL}/predictions`, {
+    // Lanza la predicción con la versión del modelo (Prefer: wait → espera hasta ~60s)
+    const r = await fetch('https://api.replicate.com/v1/predictions', {
       method:'POST',
       headers:{ Authorization:`Bearer ${TOKEN}`, 'Content-Type':'application/json', 'Prefer':'wait' },
-      body: JSON.stringify({ input: { image, mask } })
+      body: JSON.stringify({ version: VERSION, input: { image, mask } })
     });
     let d = await r.json();
     if(!r.ok) return res.status(r.status).json({ error: d.detail || d.title || ('Replicate ' + r.status) });
