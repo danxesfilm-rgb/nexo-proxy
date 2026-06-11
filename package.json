@@ -1,5 +1,13 @@
 {
   "name": "nexo-proxy",
   "version": "1.0.0",
-  "description": "Proxy para HuggingFace FLUX — NEXO Agency"
+  "description": "Proxy IA — NEXO Agency",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
 }
