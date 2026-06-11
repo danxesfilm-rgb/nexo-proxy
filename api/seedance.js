@@ -31,9 +31,9 @@ export default async function handler(req, res){
       if(!r.ok) return res.status(r.status).json({ error: d.error?.message || 'Seedance poll error' });
       const st = d.status; // queued | running | succeeded | failed | cancelled
       if(st === 'succeeded'){
-        const rawUrl = d.content?.video_url || d.content?.[0]?.video_url;
-        const proto = req.headers['x-forwarded-proto'] || 'https';
-        const url = `${proto}://${req.headers.host}/api/dl?url=${encodeURIComponent(rawUrl)}&name=seedance-nexo.mp4`;
+        const url = d.content?.video_url || d.content?.[0]?.video_url;
+        if(!url) return res.status(200).json({ status:'failed', error:'Sin URL de video en la respuesta' });
+        // URL directa del CDN de Seedance — no pasa por Vercel
         return res.status(200).json({ status:'done', url, dur:'5s' });
       }
       if(st === 'failed' || st === 'cancelled'){

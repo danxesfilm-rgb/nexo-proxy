@@ -22,12 +22,18 @@ export default async function handler(req, res){
     if(req.method === 'GET' && req.query.download){
       const uri = String(req.query.download);
       const sep = uri.includes('?') ? '&' : '?';
-      const r = await fetch(uri + sep + 'key=' + GEMINI_KEY);
-      if(!r.ok) return res.status(r.status).json({ error:'download '+r.status });
+      // Reenviar Range para seek en el <video>
+      const fwdHeaders = {};
+      if(req.headers.range) fwdHeaders['Range'] = req.headers.range;
+      const r = await fetch(uri + sep + 'key=' + GEMINI_KEY, { headers: fwdHeaders });
+      if(!(r.ok || r.status === 206)) return res.status(r.status).json({ error:'download '+r.status });
       res.setHeader('Content-Type', r.headers.get('content-type') || 'video/mp4');
-      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Cache-Control', 'public, max-age=604800, immutable'); // 7 días
+      if(r.headers.get('content-length')) res.setHeader('Content-Length', r.headers.get('content-length'));
+      if(r.headers.get('content-range')) res.setHeader('Content-Range', r.headers.get('content-range'));
       const buf = Buffer.from(await r.arrayBuffer());
-      return res.status(200).send(buf);
+      return res.status(r.status === 206 ? 206 : 200).send(buf);
     }
 
     /* ── POLLING ── */
