@@ -76,11 +76,8 @@ export default async function handler(req, res){
     const { image, mask, engine } = req.body || {};
     if(!image || !mask) return res.status(400).json({ error:'Faltan image o mask' });
 
-    const out = (engine === 'lama') ? await runLama(image, mask) : await runBria(image, mask);
-
-    // Envolver por /api/dl (CORS + el cliente compone sobre el original)
-    const proto = req.headers['x-forwarded-proto'] || 'https';
-    const url = `${proto}://${req.headers.host}/api/dl?url=${encodeURIComponent(out)}&name=clean-nexo.png`;
+    const url = (engine === 'lama') ? await runLama(image, mask) : await runBria(image, mask);
+    // Devolver URL directa — Bria y Replicate son accesibles desde el navegador sin proxy
     return res.status(200).json({ url });
   }catch(e){
     return res.status(500).json({ error: e.message });
