@@ -13,6 +13,7 @@ import pingHandler       from './api/ping.js';
 import dlHandler         from './api/dl.js';
 import downloadHandler   from './api/download.js';
 import transcribeHandler from './api/transcribe.js';
+import trendsHandler     from './api/trends.js';
 
 const app = express();
 app.use(express.json({ limit: '20mb' }));
@@ -37,6 +38,7 @@ app.all('/api/ping',       route(pingHandler));
 app.all('/api/dl',         route(dlHandler));
 app.all('/api/download',   route(downloadHandler));
 app.all('/api/transcribe', route(transcribeHandler));
+app.all('/api/trends',     route(trendsHandler));
 
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'nexo-proxy', host: 'render' }));
 
