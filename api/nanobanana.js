@@ -57,7 +57,7 @@ export default async function handler(req, res){
         prompt,
         input_image: `data:image/jpeg;base64,${refs[0]}`,
         aspect_ratio: normalizeKontext(aspectRatio),
-        output_format: 'webp',
+        output_format: 'jpg',
         safety_tolerance: 2,
       };
     } else {
@@ -66,7 +66,7 @@ export default async function handler(req, res){
       input = {
         prompt,
         aspect_ratio: normalizeAspect(aspectRatio),
-        output_format: 'webp',
+        output_format: 'jpg',
         num_outputs: 1,
       };
     }
