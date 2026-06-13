@@ -41,7 +41,7 @@ export default async function handler(req, res){
       output_format: 'webp',
       num_outputs: 1,
     };
-    if(hasRef) input.image_prompt = refs[0];
+    if(hasRef) input.image_prompt = `data:image/jpeg;base64,${refs[0]}`;
 
     const r = await fetch('https://api.replicate.com/v1/models/' + model + '/predictions', {
       method: 'POST',
