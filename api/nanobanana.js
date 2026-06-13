@@ -1,10 +1,20 @@
 /* ============================================================
-   NEXO Proxy · Nano Banana (Gemini 2.5 Flash Image)
+   NEXO Proxy · Nano Banana (Flux Schnell via Replicate)
    POST { prompt, aspectRatio, refs[] } → { image: dataURL }
-   Key: env GEMINI_API_KEY (nunca llega al navegador)
+   Key: env REPLICATE_API_TOKEN
    ============================================================ */
-const GEMINI_KEY = process.env.GEMINI_API_KEY;
-const MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image';
+const REPLICATE_TOKEN = process.env.REPLICATE_API_TOKEN;
+const FLUX_MODEL      = 'black-forest-labs/flux-schnell';
+
+const ASPECT_MAP = {
+  '1:1':  { width:1024, height:1024 },
+  '16:9': { width:1344, height:768  },
+  '9:16': { width:768,  height:1344 },
+  '4:3':  { width:1152, height:896  },
+  '3:4':  { width:896,  height:1152 },
+};
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 export default async function handler(req, res){
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -12,35 +22,57 @@ export default async function handler(req, res){
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if(req.method === 'OPTIONS') return res.status(204).end();
   if(req.method !== 'POST') return res.status(405).json({ error:'Method not allowed' });
-  if(!GEMINI_KEY) return res.status(500).json({ error:'Falta GEMINI_API_KEY en el servidor' });
+  if(!REPLICATE_TOKEN) return res.status(500).json({ error:'Falta REPLICATE_API_TOKEN en el servidor' });
 
   try{
     const { prompt, aspectRatio, refs } = req.body || {};
     if(!prompt) return res.status(400).json({ error:'Falta el prompt' });
 
-    const parts = [{ text: prompt }];
-    (refs || []).forEach(r => {
-      const [meta, b64] = String(r).split(',');
-      if(!b64) return;
-      const mime = (meta.match(/data:(.*?);/) || [])[1] || 'image/png';
-      parts.push({ inline_data: { mime_type: mime, data: b64 } });
-    });
+    const dims = ASPECT_MAP[aspectRatio] || ASPECT_MAP['1:1'];
 
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_KEY}`, {
-      method:'POST', headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: { responseModalities:['IMAGE'], imageConfig:{ aspectRatio: aspectRatio || '1:1' } }
-      })
-    });
-    const data = await r.json();
-    if(!r.ok) return res.status(r.status).json({ error: data?.error?.message || ('Gemini '+r.status) });
+    // Si hay imagen de referencia, usar flux-dev con image_prompt
+    const hasRef = refs && refs.length > 0;
+    const model  = hasRef ? 'black-forest-labs/flux-dev' : FLUX_MODEL;
 
-    const cand = data.candidates?.[0]?.content?.parts || [];
-    const img = cand.find(p => p.inlineData || p.inline_data);
-    if(!img) return res.status(502).json({ error:'Sin imagen en la respuesta de Gemini' });
-    const inl = img.inlineData || img.inline_data;
-    return res.status(200).json({ image: `data:${inl.mimeType || inl.mime_type || 'image/png'};base64,${inl.data}` });
+    const input = {
+      prompt,
+      width:  dims.width,
+      height: dims.height,
+      output_format: 'webp',
+      num_outputs: 1,
+    };
+    if(hasRef) input.image_prompt = refs[0];
+
+    const r = await fetch('https://api.replicate.com/v1/models/' + model + '/predictions', {
+      method: 'POST',
+      headers: { Authorization:`Bearer ${REPLICATE_TOKEN}`, 'Content-Type':'application/json', 'Prefer':'wait' },
+      body: JSON.stringify({ input })
+    });
+    let d = await r.json();
+    if(!r.ok) return res.status(r.status).json({ error: d.detail || d.title || ('Replicate '+r.status) });
+
+    // Polling si no vino en el Prefer:wait
+    if(d.status && d.status !== 'succeeded' && d.urls?.get){
+      for(let i=0; i<30; i++){
+        if(d.status === 'failed' || d.status === 'canceled') break;
+        await sleep(1500);
+        const pr = await fetch(d.urls.get, { headers:{ Authorization:`Bearer ${REPLICATE_TOKEN}` } });
+        d = await pr.json();
+        if(d.status === 'succeeded') break;
+      }
+    }
+    if(d.status === 'failed') return res.status(500).json({ error: d.error || 'Render fallido' });
+
+    let url = Array.isArray(d.output) ? d.output[0] : d.output;
+    if(!url) return res.status(502).json({ error:'Replicate no devolvió imagen' });
+
+    // Convertir URL a dataURL para devolverla igual que antes
+    const imgRes = await fetch(url);
+    const buf    = await imgRes.arrayBuffer();
+    const b64    = Buffer.from(buf).toString('base64');
+    const mime   = imgRes.headers.get('content-type') || 'image/webp';
+    return res.status(200).json({ image: `data:${mime};base64,${b64}` });
+
   }catch(e){
     return res.status(500).json({ error: e.message });
   }
