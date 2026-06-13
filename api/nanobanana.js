@@ -4,7 +4,7 @@
    Key: env GEMINI_API_KEY (nunca llega al navegador)
    ============================================================ */
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
-const MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.0-flash-exp';
+const MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image';
 
 export default async function handler(req, res){
   res.setHeader('Access-Control-Allow-Origin', '*');
