@@ -1,13 +1,15 @@
 /* ============================================================
    NEXO Proxy · Mejora de prompts con Gemini (capa gratuita)
    POST { prompt, type:'image'|'video' } → { prompt: '<mejorado>' }
-   Key: env GEMINI_API_KEY (la misma que ya usa Veo)
+   Key: env GEMINI_TEXT_KEY, y si no existe cae a GEMINI_API_KEY.
+        Se admite una key aparte porque la de Veo puede estar restringida
+        al método predictLongRunning y rechazar generateContent.
    Modelo: env GEMINI_TEXT_MODEL (opcional) · por defecto Flash-Lite
 
    Los system prompts viven aquí y no en el navegador: así el endpoint
    solo sabe hacer una cosa y no queda como un LLM abierto a cualquiera.
    ============================================================ */
-const GEMINI_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_KEY = process.env.GEMINI_TEXT_KEY || process.env.GEMINI_API_KEY;
 
 // Si Google retira un ID de modelo, se prueba el siguiente de la lista
 const MODELS = [
@@ -48,7 +50,11 @@ async function askGemini(model, system, prompt){
   });
   const d = await r.json().catch(() => ({}));
   if(!r.ok){
-    const msg = d?.error?.message || `Gemini ${r.status}`;
+    let msg = d?.error?.message || `Gemini ${r.status}`;
+    // Google devuelve esto cuando la key está restringida y no admite generateContent
+    if(/are blocked|API_KEY_SERVICE_BLOCKED|SERVICE_DISABLED/i.test(msg)){
+      msg = 'La key de Gemini no tiene permitido generar texto. Revisa las restricciones de la key o usa una nueva de AI Studio en GEMINI_TEXT_KEY.';
+    }
     const err = new Error(msg);
     err.status = r.status;
     throw err;
