@@ -14,6 +14,9 @@ import dlHandler         from './api/dl.js';
 import downloadHandler   from './api/download.js';
 import transcribeHandler from './api/transcribe.js';
 import trendsHandler     from './api/trends.js';
+import promptHandler     from './api/prompt.js';
+import cleanupHandler    from './api/cleanup.js';
+import upscaleHandler    from './api/upscale.js';
 
 const app = express();
 app.use(express.json({ limit: '20mb' }));
@@ -39,6 +42,9 @@ app.all('/api/dl',         route(dlHandler));
 app.all('/api/download',   route(downloadHandler));
 app.all('/api/transcribe', route(transcribeHandler));
 app.all('/api/trends',     route(trendsHandler));
+app.all('/api/prompt',     route(promptHandler));
+app.all('/api/cleanup',    route(cleanupHandler));
+app.all('/api/upscale',    route(upscaleHandler));
 
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'nexo-proxy', host: 'render' }));
 
