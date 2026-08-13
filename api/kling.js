@@ -50,10 +50,11 @@ export default async function handler(req, res){
       if(!prompt) return res.status(400).json({ error:'Falta el prompt' });
 
       const modelName  = ALLOWED_MODELS.includes(model) ? model : DEFAULT_MODEL;
-      const klingMode  = mode === 'pro' ? 'pro' : 'std';
       const useImg     = !!image;
       // image_tail solo está disponible en modelos que soporten First/Last Frame (ej. kling-v2-6)
       const useTail    = useImg && !!image_tail;
+      // Kling exige modo 'pro' para First/Last Frame (image_tail no está soportado en std)
+      const klingMode  = (useTail || mode === 'pro') ? 'pro' : 'std';
       const ep         = useImg ? 'image2video' : 'text2video';
 
       let body;

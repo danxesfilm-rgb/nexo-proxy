@@ -1,13 +1,15 @@
 /* ============================================================
    NEXO Proxy · Mejora de prompts con Gemini (capa gratuita)
    POST { prompt, type:'image'|'video' } → { prompt: '<mejorado>' }
-   Key: env GEMINI_API_KEY (la misma que ya usa Veo)
+   Key: env GEMINI_TEXT_KEY, y si no existe cae a GEMINI_API_KEY.
+        Se admite una key aparte porque la de Veo puede estar restringida
+        al método predictLongRunning y rechazar generateContent.
    Modelo: env GEMINI_TEXT_MODEL (opcional) · por defecto Flash-Lite
 
    Los system prompts viven aquí y no en el navegador: así el endpoint
    solo sabe hacer una cosa y no queda como un LLM abierto a cualquiera.
    ============================================================ */
-const GEMINI_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_KEY = process.env.GEMINI_TEXT_KEY || process.env.GEMINI_API_KEY;
 
 // Si Google retira un ID de modelo, se prueba el siguiente de la lista
 const MODELS = [
@@ -15,21 +17,25 @@ const MODELS = [
   'gemini-3.6-flash',
 ].filter((m, i, a) => m && a.indexOf(m) === i);
 
+/* Los dos system prompts comparten la misma disciplina: precisar lo que el
+   usuario ya escribió, no inventar una escena nueva encima. */
+const COMUN = `
+Reglas estrictas:
+- NO inventes sujetos, objetos, personas ni escenarios que el usuario no haya mencionado.
+- No cambies lo que pidió: solo precisa lo que ya está ahí.
+- Añade como máximo 3 o 4 descriptores nuevos. Si el prompt ya viene detallado, cambia muy poco.
+- Escribe en el MISMO idioma en que escribió el usuario. Si escribió en español, responde en español.
+- Una o dos oraciones como mucho.
+- Devuelve únicamente el prompt, sin comillas, sin explicaciones y sin prefijos.`;
+
 const SYSTEM = {
-  video: `Eres un director de fotografía y experto en prompts para generadores de video IA (Kling, Veo, Seedance).
-Tu tarea: reescribir el prompt del usuario para obtener el mejor resultado visual posible.
-Reglas:
-- Añade descripción de movimiento de cámara (ej: "slow zoom in", "cinematic dolly shot", "static shot").
-- Añade iluminación y atmósfera ("golden hour light", "soft studio lighting", "dramatic shadows").
-- Añade detalle de la acción y velocidad del movimiento.
-- Mantén la idea original del usuario, solo enriquécela.
-- Máximo 2 oraciones. Solo en inglés. Devuelve únicamente el prompt mejorado, sin explicaciones ni comillas.`,
+  video: `Eres un director de fotografía experto en prompts para generadores de video IA (Kling, Veo, Seedance).
+Tu tarea: reescribir el prompt del usuario para que rinda mejor, respetando su idea al pie de la letra.
+Puedes precisar: movimiento de cámara (plano fijo, travelling lento, zoom suave), iluminación y atmósfera, y el ritmo de la acción.${COMUN}`,
+
   image: `Eres un experto en prompts para generadores de imagen IA (Flux, Stable Diffusion, Midjourney).
-Tu tarea: reescribir el prompt del usuario para obtener el mejor resultado visual posible.
-Reglas:
-- Añade estilo artístico, iluminación, composición y calidad ("8K", "photorealistic", "studio lighting").
-- Mantén la idea original del usuario, solo enriquécela.
-- Máximo 2 oraciones. Solo en inglés. Devuelve únicamente el prompt mejorado, sin explicaciones ni comillas.`,
+Tu tarea: reescribir el prompt del usuario para que rinda mejor, respetando su idea al pie de la letra.
+Puedes precisar: encuadre y composición, iluminación, materiales y texturas, estilo y nivel de detalle.${COMUN}`,
 };
 
 const API = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -43,12 +49,17 @@ async function askGemini(model, system, prompt){
       contents: [{ role:'user', parts:[{ text: prompt }] }],
       // holgado a propósito: los modelos 3.x razonan antes de responder y un
       // tope corto se consume en el razonamiento, devolviendo texto vacío
-      generationConfig: { maxOutputTokens: 1024, temperature: 0.9 },
+      // temperatura baja: interesa que ciña el prompt del usuario, no que invente
+      generationConfig: { maxOutputTokens: 1024, temperature: 0.35 },
     }),
   });
   const d = await r.json().catch(() => ({}));
   if(!r.ok){
-    const msg = d?.error?.message || `Gemini ${r.status}`;
+    let msg = d?.error?.message || `Gemini ${r.status}`;
+    // Google devuelve esto cuando la key está restringida y no admite generateContent
+    if(/are blocked|API_KEY_SERVICE_BLOCKED|SERVICE_DISABLED/i.test(msg)){
+      msg = 'La key de Gemini no tiene permitido generar texto. Revisa las restricciones de la key o usa una nueva de AI Studio en GEMINI_TEXT_KEY.';
+    }
     const err = new Error(msg);
     err.status = r.status;
     throw err;
