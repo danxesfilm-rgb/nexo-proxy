@@ -17,6 +17,7 @@ import trendsHandler     from './api/trends.js';
 import promptHandler     from './api/prompt.js';
 import cleanupHandler    from './api/cleanup.js';
 import upscaleHandler    from './api/upscale.js';
+import removebgHandler   from './api/removebg.js';
 
 const app = express();
 app.use(express.json({ limit: '20mb' }));
@@ -45,6 +46,7 @@ app.all('/api/trends',     route(trendsHandler));
 app.all('/api/prompt',     route(promptHandler));
 app.all('/api/cleanup',    route(cleanupHandler));
 app.all('/api/upscale',    route(upscaleHandler));
+app.all('/api/removebg',   route(removebgHandler));
 
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'nexo-proxy', host: 'render' }));
 

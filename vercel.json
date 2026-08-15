@@ -26,6 +26,12 @@
     },
     "api/cleanup.js": {
       "maxDuration": 60
+    },
+    "api/upscale.js": {
+      "maxDuration": 60
+    },
+    "api/removebg.js": {
+      "maxDuration": 60
     }
   }
 }
