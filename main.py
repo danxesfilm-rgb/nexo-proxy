@@ -277,12 +277,19 @@ def api_download(payload: dict = Body(...)):
 # TIKTOK
 # ───────────────────────────────────────────────────────────────────────────
 def _tiktok_info(url: str) -> dict:
+    # TikWM suele bloquear las IPs de datacenter y responder HTML en vez de JSON.
+    # La página resuelve TikTok desde el navegador, así que este camino es solo
+    # respaldo; si falla, que el mensaje lo diga claro.
     try:
         with httpx.Client(timeout=12, follow_redirects=True) as client:
-            r = client.get("https://www.tikwm.com/api/", params={"url": url, "hd": 1})
+            r = client.get(
+                "https://www.tikwm.com/api/",
+                params={"url": url, "hd": 1},
+                headers={"User-Agent": _MOBILE_UA, "Accept": "application/json"},
+            )
         payload = r.json()
-    except Exception as e:
-        raise HTTPException(502, f"TikWM no disponible: {e}")
+    except Exception:
+        raise HTTPException(502, "TikWM rechazó la petición desde el servidor.")
 
     if payload.get("code") != 0 or not payload.get("data"):
         raise HTTPException(502, payload.get("msg") or "Sin datos.")
@@ -393,15 +400,18 @@ def _yt_info(url: str) -> dict:
             "type":       "audio",
         })
 
-    # ── Cobalt al frente ───────────────────────────────────────────────────
+    # ── Cobalt manda ───────────────────────────────────────────────────────
     # Lo muxeado que da yt-dlp rara vez pasa de 360p, y sus URLs de googlevideo
-    # van firmadas para la IP del servidor. Cobalt entrega HD con audio por un
-    # túnel que sí funciona desde el navegador del usuario, así que va primero;
-    # lo de yt-dlp queda como alternativa. Solo se omite si yt-dlp ya dio un
-    # progresivo de 720p o más, que es lo que casi nunca pasa.
+    # llevan ?ip=<IP del servidor>: el navegador del usuario recibe 403 al
+    # abrirlas. Cobalt entrega HD con audio por un túnel que sí funciona desde
+    # cualquier IP, así que cuando responde se descarta el resto — mostrar
+    # botones que van a fallar es peor que no mostrarlos.
+    # Solo se conserva lo de yt-dlp si ya trae un progresivo de 720p o más
+    # (que casi nunca pasa) o si cobalt no respondió.
     has_hd_muxed = any(f.get("muxed") and (f.get("height") or 0) >= 720 for f in result)
     if not has_hd_muxed:
-        result = _cobalt_youtube(url) + result
+        cobalt_fmts = _cobalt_youtube(url)
+        result = cobalt_fmts if cobalt_fmts else result
 
     if not result:
         raise HTTPException(status_code=422, detail="No se encontraron formatos de descarga.")
