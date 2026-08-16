@@ -15,13 +15,25 @@ Deploy: Render.com free tier
 import os
 import re
 import base64
+import subprocess
 import tempfile
 import atexit
 import httpx
 import yt_dlp
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
+
+# ffmpeg es imprescindible para /stream: yt-dlp lo usa para juntar el video y
+# el audio, que YouTube entrega por separado. Render no trae ffmpeg y el build
+# no puede hacer apt-get, así que static_ffmpeg pone un binario en el PATH.
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+    _FFMPEG_OK = True
+except Exception as e:      # sin ffmpeg /stream solo puede servir sin muxear
+    print(f"[ffmpeg] no disponible: {e}")
+    _FFMPEG_OK = False
 
 app = FastAPI(title="NEXO yt-dlp Server", version="2.0")
 
@@ -172,6 +184,7 @@ def health():
         "status": "ok",
         "engine": "yt-dlp",
         "yt_dlp_version": getattr(yt_dlp.version, "__version__", "?"),
+        "ffmpeg": _FFMPEG_OK,
         "ig_cookies": bool(_IG_COOKIES_FILE),
         "yt_cookies": bool(_YT_COOKIES_FILE),
         "cobalt_instances": len(_COBALT_INSTANCES),
@@ -392,78 +405,154 @@ def _yt_info(url: str) -> dict:
     title     = info.get("title", "Video de YouTube")
     thumbnail = _best_thumb(info) or _yt_thumb_from_url(url)
     formats   = info.get("formats") or []
-    result    = []
 
-    # ── Video por calidad ──────────────────────────────────────────────────
+    # ── Alturas realmente disponibles ──────────────────────────────────────
+    # No se usan las URLs de yt-dlp: googlevideo las firma con ?ip=<IP de este
+    # servidor> y el navegador del usuario recibe 403. Además casi todas son
+    # video-only. Solo interesa saber qué calidades existen; el archivo lo
+    # arma y lo sirve /stream desde aquí.
+    disponibles = {
+        f.get("height") for f in formats
+        if f.get("height") and f.get("vcodec") not in (None, "none")
+    }
+
+    result = []
     for h in _YT_HEIGHTS:
-        # Progresivo (video + audio) primero
-        prog = [
-            f for f in formats
-            if f.get("height") == h
-            and f.get("ext") == "mp4"
-            and f.get("acodec") not in (None, "none")
-            and f.get("vcodec") not in (None, "none")
-            and f.get("url")
-        ]
-        # Video-only como alternativa
-        vonly = [
-            f for f in formats
-            if f.get("height") == h
-            and f.get("ext") == "mp4"
-            and f.get("vcodec") not in (None, "none")
-            and f.get("url")
-        ] if not prog else []
+        if h not in disponibles:
+            continue
+        result.append({
+            "quality":    _YT_LABELS.get(h, f"{h}p"),
+            "stream_url": _stream_url(url, quality=str(h), mode="video", title=title),
+            "ext":        "mp4",
+            "type":       "video",
+        })
 
-        chosen = prog or vonly
-        if chosen:
-            chosen.sort(key=lambda f: f.get("filesize") or f.get("filesize_approx") or 0, reverse=True)
-            f = chosen[0]
-            result.append({
-                "quality":    _YT_LABELS.get(h, f"{h}p") + ("" if prog else " (sin audio)"),
-                "stream_url": f["url"],
-                "ext":        "mp4",
-                "type":       "video",
-                "muxed":      bool(prog),
-                "height":     h,
-            })
-
-    # ── Audio ──────────────────────────────────────────────────────────────
-    audio = [
-        f for f in formats
-        if f.get("vcodec") in (None, "none")
-        and f.get("acodec") not in (None, "none")
-        and f.get("url")
-    ]
-    if audio:
-        audio.sort(key=lambda f: f.get("abr") or 0, reverse=True)
-        a = audio[0]
+    tiene_audio = any(
+        f.get("acodec") not in (None, "none") for f in formats
+    )
+    if tiene_audio or result:
         result.append({
             "quality":    "MP3 Audio",
-            "stream_url": a["url"],
-            "ext":        a.get("ext", "m4a"),
+            "stream_url": _stream_url(url, quality="0", mode="audio", title=title),
+            "ext":        "mp3",
             "type":       "audio",
         })
 
-    # ── Cobalt manda ───────────────────────────────────────────────────────
-    # Lo muxeado que da yt-dlp rara vez pasa de 360p, y sus URLs de googlevideo
-    # llevan ?ip=<IP del servidor>: el navegador del usuario recibe 403 al
-    # abrirlas. Cobalt entrega HD con audio por un túnel que sí funciona desde
-    # cualquier IP, así que cuando responde se descarta el resto — mostrar
-    # botones que van a fallar es peor que no mostrarlos.
-    # Solo se conserva lo de yt-dlp si ya trae un progresivo de 720p o más
-    # (que casi nunca pasa) o si cobalt no respondió.
-    has_hd_muxed = any(f.get("muxed") and (f.get("height") or 0) >= 720 for f in result)
-    if not has_hd_muxed:
-        cobalt_fmts = _cobalt_youtube(url)
-        result = cobalt_fmts if cobalt_fmts else result
+    # ── Último recurso: cobalt ─────────────────────────────────────────────
+    # Solo si yt-dlp no vio ni un formato. Ojo: las instancias públicas de
+    # cobalt responden 200 con cuerpo vacío en bastantes videos, así que esto
+    # es una red de seguridad, no el camino principal.
+    if not result:
+        result = _cobalt_youtube(url)
 
     if not result:
         raise HTTPException(status_code=422, detail="No se encontraron formatos de descarga.")
 
-    for f in result:
-        f.pop("muxed", None)
-        f.pop("height", None)
     return {"title": title, "thumbnail": thumbnail, "formats": result}
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# /stream  — el archivo se arma y se sirve desde este servidor
+#
+# Por qué no se entregan URLs de terceros:
+#  · googlevideo firma las suyas con la IP de este servidor → 403 en el
+#    navegador del usuario, y ademas casi todas son video sin audio.
+#  · las instancias publicas de cobalt responden 200 con cuerpo vacio en
+#    bastantes videos (medido: 3 de 5), y el navegador guarda 0 bytes sin
+#    ningun aviso.
+# Aqui yt-dlp baja video y audio, ffmpeg los junta, y el resultado sale por
+# esta respuesta en trozos. Cuesta ancho de banda de Render pero es el unico
+# camino que no depende de que un tercero se porte bien.
+# ───────────────────────────────────────────────────────────────────────────
+_BASE_URL = (os.environ.get("RENDER_EXTERNAL_URL")
+             or os.environ.get("BASE_URL")
+             or "https://nexo-proxy.onrender.com").rstrip("/")
+
+
+def _safe_filename(title: str) -> str:
+    limpio = re.sub(r'[\\/:*?"<>|\r\n]+', "", title or "").strip()
+    return (limpio or "video")[:120]
+
+
+def _stream_url(url: str, quality: str, mode: str, title: str) -> str:
+    from urllib.parse import urlencode
+    return f"{_BASE_URL}/stream?" + urlencode({
+        "url": url, "quality": quality, "mode": mode, "title": _safe_filename(title),
+    })
+
+
+@app.get("/stream")
+def stream(
+    url:     str = Query(...),
+    quality: str = Query("1080"),
+    mode:    str = Query("video"),
+    title:   str = Query("video"),
+):
+    es_audio = mode == "audio"
+    nombre   = _safe_filename(title)
+
+    cmd = ["yt-dlp", "--no-playlist", "--no-warnings", "--quiet", "-o", "-"]
+
+    if es_audio:
+        cmd += ["-f", "bestaudio/best", "-x", "--audio-format", "mp3"]
+        ext, ctype = "mp3", "audio/mpeg"
+    else:
+        q = quality if quality.isdigit() else "1080"
+        cmd += [
+            "-f",
+            f"bestvideo[height<={q}][ext=mp4]+bestaudio[ext=m4a]"
+            f"/bestvideo[height<={q}]+bestaudio"
+            f"/best[height<={q}]/best",
+            "--merge-output-format", "mp4",
+        ]
+        ext, ctype = "mp4", "video/mp4"
+
+    es_yt = "youtube.com" in url or "youtu.be" in url
+    if es_yt:
+        cmd += ["--extractor-args",
+                "youtube:player_client=tv,web_safari,mweb,android_vr,web"]
+        if _YT_COOKIES_FILE:
+            cmd += ["--cookies", _YT_COOKIES_FILE]
+    elif _IG_COOKIES_FILE:
+        cmd += ["--cookies", _IG_COOKIES_FILE]
+
+    cmd.append(url)
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    # Se lee el primer trozo antes de responder. Si yt-dlp no produce nada, se
+    # devuelve un 502 con el motivo en vez de un 200 con el cuerpo vacío: un
+    # archivo de 0 bytes sin explicación es el peor resultado posible.
+    primero = proc.stdout.read(65536)
+    if not primero:
+        proc.wait(timeout=10)
+        err = (proc.stderr.read() or b"")[-400:].decode("utf-8", "ignore").strip()
+        print(f"[stream] yt-dlp sin salida ({proc.returncode}): {err}")
+        raise HTTPException(502, f"No se pudo preparar la descarga. {err[-160:]}".strip())
+
+    def generar():
+        try:
+            yield primero
+            while True:
+                trozo = proc.stdout.read(65536)
+                if not trozo:
+                    break
+                yield trozo
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+
+    return StreamingResponse(
+        generar(),
+        media_type=ctype,
+        headers={
+            "Content-Disposition": f'attachment; filename="{nombre}.{ext}"',
+            "Cache-Control":       "no-cache",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
 
 
 def _yt_thumb_from_url(url: str) -> str:
