@@ -1,4 +1,6 @@
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
-yt-dlp>=2024.11.18
+# yt-dlp queda obsoleto en semanas: YouTube e Instagram cambian sus APIs seguido.
+# Se deja sin pin y el startCommand hace `pip install -U yt-dlp` en cada arranque.
+yt-dlp
 httpx>=0.27.0

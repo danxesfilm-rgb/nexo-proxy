@@ -19,7 +19,7 @@ import tempfile
 import atexit
 import httpx
 import yt_dlp
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
@@ -28,7 +28,7 @@ app = FastAPI(title="NEXO yt-dlp Server", version="2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET", "OPTIONS"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -74,6 +74,78 @@ def _cleanup():
 atexit.register(_cleanup)
 
 # ───────────────────────────────────────────────────────────────────────────
+# COBALT — motor externo para YouTube
+#
+# YouTube ya no entrega formatos progresivos (video+audio) a IPs de datacenter
+# sin PO token, y las URLs de googlevideo que devuelve yt-dlp quedan ligadas a
+# la IP del servidor → el navegador del usuario recibe 403 al descargarlas.
+# Cobalt resuelve las dos cosas: muxea video+audio y sirve el archivo por su
+# propio túnel, así que el enlace funciona desde cualquier IP.
+#
+# Se puede sobrescribir la lista con la env var COBALT_INSTANCES (separadas por
+# coma). Lo ideal a medio plazo es alojar una instancia propia de cobalt y
+# ponerla primera en la lista.
+# ───────────────────────────────────────────────────────────────────────────
+_COBALT_DEFAULT = [
+    "https://co.otomir23.me",
+    "https://cobalt-api.kwiatekmiki.com",
+    "https://cobalt-backend.canine.tools",
+    "https://api.cobalt.tools",
+]
+_COBALT_INSTANCES = [
+    i.strip().rstrip("/")
+    for i in os.environ.get("COBALT_INSTANCES", ",".join(_COBALT_DEFAULT)).split(",")
+    if i.strip()
+]
+_COBALT_HEADERS = {
+    "Accept": "application/json",   # obligatorio: sin esto responde error.api.header.accept
+    "Content-Type": "application/json",
+    "User-Agent": "NEXO-Proxy/2.1",
+}
+
+
+def _cobalt(payload: dict, timeout: float = 15.0) -> dict | None:
+    """Consulta las instancias de cobalt en orden y devuelve la primera respuesta útil."""
+    for base in _COBALT_INSTANCES:
+        try:
+            with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+                r = client.post(f"{base}/", headers=_COBALT_HEADERS, json=payload)
+            if r.status_code != 200:
+                continue
+            j = r.json()
+            if j.get("status") in ("tunnel", "redirect", "stream") and j.get("url"):
+                return j
+            if j.get("status") == "picker" and j.get("picker"):
+                return j
+        except Exception:
+            continue
+    return None
+
+
+def _cobalt_youtube(url: str, quality: str = "1080") -> list:
+    """Formatos de YouTube (video muxeado + audio mp3) vía cobalt."""
+    out = []
+    v = _cobalt({"url": url, "downloadMode": "auto", "videoQuality": quality})
+    if v:
+        out.append({
+            "quality":    f"MP4 · {quality}p",
+            "stream_url": v["url"],
+            "ext":        "mp4",
+            "type":       "video",
+            "filename":   v.get("filename", ""),
+        })
+    a = _cobalt({"url": url, "downloadMode": "audio", "audioFormat": "mp3"})
+    if a:
+        out.append({
+            "quality":    "MP3 Audio",
+            "stream_url": a["url"],
+            "ext":        "mp3",
+            "type":       "audio",
+            "filename":   a.get("filename", ""),
+        })
+    return out
+
+# ───────────────────────────────────────────────────────────────────────────
 # HEALTH / WARM-UP
 # ───────────────────────────────────────────────────────────────────────────
 @app.get("/")
@@ -82,8 +154,10 @@ def health():
     return {
         "status": "ok",
         "engine": "yt-dlp",
+        "yt_dlp_version": getattr(yt_dlp.version, "__version__", "?"),
         "ig_cookies": bool(_IG_COOKIES_FILE),
         "yt_cookies": bool(_YT_COOKIES_FILE),
+        "cobalt_instances": len(_COBALT_INSTANCES),
     }
 
 
@@ -150,6 +224,85 @@ def embed(url: str = Query(...)):
 
 
 # ───────────────────────────────────────────────────────────────────────────
+# /api/download  — contrato compatible con el antiguo proxy de Vercel
+# POST {url, service, mode, quality} → {title, thumbnail, platform, videos[]}
+#
+# La página /descargar apuntaba a nexo-proxy.vercel.app, que devuelve 402
+# (deployment deshabilitado). Este endpoint replica ese contrato para que el
+# front solo tenga que cambiar la URL base.
+# ───────────────────────────────────────────────────────────────────────────
+@app.post("/api/download")
+def api_download(payload: dict = Body(...)):
+    url     = (payload.get("url") or "").strip()
+    service = (payload.get("service") or "").strip().lower()
+    quality = str(payload.get("quality") or "1080").replace("p", "") or "1080"
+
+    if not url:
+        raise HTTPException(400, "url requerido")
+    if service not in ("instagram", "tiktok", "youtube"):
+        raise HTTPException(400, "Servicio no reconocido.")
+
+    if service == "tiktok":
+        data = _tiktok_info(url)
+    elif service == "youtube":
+        data = _yt_info(url) if not payload.get("force_cobalt") else {
+            "title": "Video de YouTube",
+            "thumbnail": _yt_thumb_from_url(url),
+            "formats": _cobalt_youtube(url, quality),
+        }
+    else:
+        data = _ig_info(url)
+
+    videos = [{
+        "quality":   f.get("quality", "original"),
+        "url":       f["stream_url"],
+        "extension": f.get("ext", "mp4"),
+        "type":      f.get("type", "video"),
+        "mediaType": f.get("type", "video"),
+    } for f in data.get("formats", []) if f.get("stream_url")]
+
+    if not videos:
+        raise HTTPException(422, "No se encontró contenido descargable.")
+
+    return {
+        "title":       data.get("title", ""),
+        "thumbnail":   data.get("thumbnail", ""),
+        "platform":    service,
+        "downloadUrl": videos[0]["url"],
+        "videos":      videos,
+    }
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# TIKTOK
+# ───────────────────────────────────────────────────────────────────────────
+def _tiktok_info(url: str) -> dict:
+    try:
+        with httpx.Client(timeout=12, follow_redirects=True) as client:
+            r = client.get("https://www.tikwm.com/api/", params={"url": url, "hd": 1})
+        payload = r.json()
+    except Exception as e:
+        raise HTTPException(502, f"TikWM no disponible: {e}")
+
+    if payload.get("code") != 0 or not payload.get("data"):
+        raise HTTPException(502, payload.get("msg") or "Sin datos.")
+
+    d = payload["data"]
+    fmts = []
+    for key, label in (("hdplay", "HD sin marca"), ("play", "Sin marca"), ("wmplay", "Con marca")):
+        if d.get(key):
+            fmts.append({"quality": label, "stream_url": d[key], "ext": "mp4", "type": "video"})
+    if not fmts:
+        raise HTTPException(422, "No se encontró URL de descarga.")
+
+    return {
+        "title":     d.get("title") or "Video de TikTok",
+        "thumbnail": d.get("cover") or d.get("origin_cover") or "",
+        "formats":   fmts,
+    }
+
+
+# ───────────────────────────────────────────────────────────────────────────
 # YOUTUBE
 # ───────────────────────────────────────────────────────────────────────────
 _YT_HEIGHTS  = [2160, 1440, 1080, 720, 480, 360]
@@ -161,15 +314,32 @@ def _yt_info(url: str) -> dict:
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
-        # ios y web_embedded sortean mejor la detección desde datacenter
-        "extractor_args": {"youtube": {"player_client": ["ios", "web_embedded", "web"]}},
+        # Sin esto yt-dlp lanza "Requested format is not available" cuando YouTube
+        # devuelve solo formatos SABR/sin URL, y perdemos también los metadatos.
+        "ignore_no_formats_error": True,
+        # ios quedó bloqueado en 2025. tv / web_safari / mweb / android_vr son los
+        # clientes que siguen entregando URLs sin PO token desde datacenter.
+        "extractor_args": {
+            "youtube": {"player_client": ["tv", "web_safari", "mweb", "android_vr", "web"]}
+        },
     }
     if _YT_COOKIES_FILE:
         opts["cookiefile"] = _YT_COOKIES_FILE
-    info = _extract(url, opts)
+
+    try:
+        info = _extract(url, opts)
+    except HTTPException:
+        info = None
+
+    # Sin extracción posible → cobalt directo
+    if not info:
+        fmts = _cobalt_youtube(url)
+        if not fmts:
+            raise HTTPException(422, "No se encontraron formatos de descarga.")
+        return {"title": "Video de YouTube", "thumbnail": _yt_thumb_from_url(url), "formats": fmts}
 
     title     = info.get("title", "Video de YouTube")
-    thumbnail = _best_thumb(info)
+    thumbnail = _best_thumb(info) or _yt_thumb_from_url(url)
     formats   = info.get("formats") or []
     result    = []
 
@@ -198,10 +368,12 @@ def _yt_info(url: str) -> dict:
             chosen.sort(key=lambda f: f.get("filesize") or f.get("filesize_approx") or 0, reverse=True)
             f = chosen[0]
             result.append({
-                "quality":    _YT_LABELS.get(h, f"{h}p"),
+                "quality":    _YT_LABELS.get(h, f"{h}p") + ("" if prog else " (sin audio)"),
                 "stream_url": f["url"],
                 "ext":        "mp4",
                 "type":       "video",
+                "muxed":      bool(prog),
+                "height":     h,
             })
 
     # ── Audio ──────────────────────────────────────────────────────────────
@@ -221,10 +393,28 @@ def _yt_info(url: str) -> dict:
             "type":       "audio",
         })
 
+    # ── Cobalt al frente ───────────────────────────────────────────────────
+    # Lo muxeado que da yt-dlp rara vez pasa de 360p, y sus URLs de googlevideo
+    # van firmadas para la IP del servidor. Cobalt entrega HD con audio por un
+    # túnel que sí funciona desde el navegador del usuario, así que va primero;
+    # lo de yt-dlp queda como alternativa. Solo se omite si yt-dlp ya dio un
+    # progresivo de 720p o más, que es lo que casi nunca pasa.
+    has_hd_muxed = any(f.get("muxed") and (f.get("height") or 0) >= 720 for f in result)
+    if not has_hd_muxed:
+        result = _cobalt_youtube(url) + result
+
     if not result:
         raise HTTPException(status_code=422, detail="No se encontraron formatos de descarga.")
 
+    for f in result:
+        f.pop("muxed", None)
+        f.pop("height", None)
     return {"title": title, "thumbnail": thumbnail, "formats": result}
+
+
+def _yt_thumb_from_url(url: str) -> str:
+    m = re.search(r"(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{8,})", url)
+    return f"https://img.youtube.com/vi/{m.group(1)}/hqdefault.jpg" if m else ""
 
 
 # ───────────────────────────────────────────────────────────────────────────

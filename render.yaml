@@ -1,8 +1,18 @@
+# El servicio nexo-proxy.onrender.com corre main.py (FastAPI + yt-dlp),
+# no server.js. Este archivo estaba desactualizado y describía el runtime node.
 services:
   - type: web
     name: nexo-proxy
-    env: node
+    runtime: python
     plan: free
-    buildCommand: npm install
-    startCommand: node server.js
-    healthCheckPath: /api/ping
+    buildCommand: pip install -r requirements.txt
+    # -U en cada arranque: yt-dlp caduca rápido y Render no reconstruye solo.
+    startCommand: pip install -U yt-dlp --quiet && uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: IG_COOKIES_B64
+        sync: false
+      - key: YT_COOKIES_B64
+        sync: false
+      - key: COBALT_INSTANCES
+        sync: false
