@@ -481,6 +481,63 @@ def _stream_url(url: str, quality: str, mode: str, title: str) -> str:
     })
 
 
+def _pick_streams(url: str, quality: str, solo_audio: bool) -> tuple:
+    """Saca de yt-dlp las URLs directas de video y audio para pasárselas a ffmpeg.
+
+    Que vayan firmadas para la IP de este servidor da igual: quien las abre es
+    ffmpeg, aquí dentro. Lo que nunca debe salir al navegador son esas URLs.
+    """
+    opts = {
+        "quiet": True, "no_warnings": True, "skip_download": True,
+        "ignore_no_formats_error": True,
+        "extractor_args": {
+            "youtube": {"player_client": ["tv", "web_safari", "mweb", "android_vr", "web"]}
+        },
+    }
+    es_yt = "youtube.com" in url or "youtu.be" in url
+    ck = _YT_COOKIES_FILE if es_yt else _IG_COOKIES_FILE
+    if ck:
+        opts["cookiefile"] = ck
+
+    info = _extract(url, opts)
+    formats = (info or {}).get("formats") or []
+    if not formats:
+        raise HTTPException(502, "YouTube no entregó formatos a este servidor.")
+
+    ua = (formats[0].get("http_headers") or {}).get("User-Agent") or _MOBILE_UA
+
+    audios = [f for f in formats
+              if f.get("acodec") not in (None, "none") and f.get("url")
+              and f.get("vcodec") in (None, "none")]
+    audios.sort(key=lambda f: f.get("abr") or 0, reverse=True)
+    a_url = audios[0]["url"] if audios else None
+
+    if solo_audio:
+        if not a_url:
+            # sin pista de audio suelta, sirve cualquier formato con audio
+            conaudio = [f for f in formats
+                        if f.get("acodec") not in (None, "none") and f.get("url")]
+            if not conaudio:
+                raise HTTPException(502, "Este video no tiene pista de audio disponible.")
+            a_url = conaudio[0]["url"]
+        return None, a_url, ua
+
+    tope = int(quality) if quality.isdigit() and quality != "0" else 1080
+    videos = [f for f in formats
+              if f.get("vcodec") not in (None, "none") and f.get("url")
+              and (f.get("height") or 0) <= tope]
+    if not videos:
+        raise HTTPException(502, "No hay video en esa calidad.")
+    videos.sort(key=lambda f: ((f.get("height") or 0),
+                               f.get("tbr") or 0), reverse=True)
+    mejor = videos[0]
+
+    # Si ya trae audio incorporado no hace falta segunda entrada
+    if mejor.get("acodec") not in (None, "none"):
+        return mejor["url"], None, ua
+    return mejor["url"], a_url, ua
+
+
 @app.get("/stream")
 def stream(
     url:     str = Query(...),
@@ -490,33 +547,25 @@ def stream(
 ):
     es_audio = mode == "audio"
     nombre   = _safe_filename(title)
+    ext, ctype = ("mp3", "audio/mpeg") if es_audio else ("mp4", "video/mp4")
 
-    cmd = ["yt-dlp", "--no-playlist", "--no-warnings", "--quiet", "-o", "-"]
+    v_url, a_url, ua = _pick_streams(url, quality, es_audio)
+
+    # Se muxea aquí en vez de dejárselo a `yt-dlp -o -`: al escribir en una
+    # tubería no se puede rebobinar para colocar el átomo moov, así que yt-dlp
+    # cambia de formato a MPEG-TS por su cuenta. El archivo salía con extensión
+    # .mp4 pero no era un MP4 (empezaba en 0x47), y editores y reproductores
+    # pueden rechazarlo. Con MP4 fragmentado sí se puede escribir en streaming.
+    cmd = ["ffmpeg", "-loglevel", "error", "-nostdin"]
+    for entrada in ([a_url] if es_audio else [u for u in (v_url, a_url) if u]):
+        cmd += ["-user_agent", ua, "-i", entrada]
 
     if es_audio:
-        cmd += ["-f", "bestaudio/best", "-x", "--audio-format", "mp3"]
-        ext, ctype = "mp3", "audio/mpeg"
+        cmd += ["-vn", "-c:a", "libmp3lame", "-q:a", "2", "-f", "mp3"]
     else:
-        q = quality if quality.isdigit() else "1080"
-        cmd += [
-            "-f",
-            f"bestvideo[height<={q}][ext=mp4]+bestaudio[ext=m4a]"
-            f"/bestvideo[height<={q}]+bestaudio"
-            f"/best[height<={q}]/best",
-            "--merge-output-format", "mp4",
-        ]
-        ext, ctype = "mp4", "video/mp4"
-
-    es_yt = "youtube.com" in url or "youtu.be" in url
-    if es_yt:
-        cmd += ["--extractor-args",
-                "youtube:player_client=tv,web_safari,mweb,android_vr,web"]
-        if _YT_COOKIES_FILE:
-            cmd += ["--cookies", _YT_COOKIES_FILE]
-    elif _IG_COOKIES_FILE:
-        cmd += ["--cookies", _IG_COOKIES_FILE]
-
-    cmd.append(url)
+        cmd += ["-c", "copy", "-movflags",
+                "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4"]
+    cmd.append("pipe:1")
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
