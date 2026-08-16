@@ -122,10 +122,23 @@ def _cobalt(payload: dict, timeout: float = 15.0) -> dict | None:
     return None
 
 
+def _cobalt_link(url: str, kind: str = "video", quality: str = "1080") -> dict | None:
+    """Pide a cobalt un enlace de descarga recién generado."""
+    if kind == "audio":
+        return _cobalt({"url": url, "downloadMode": "audio", "audioFormat": "mp3"})
+    return _cobalt({"url": url, "downloadMode": "auto", "videoQuality": quality})
+
+
 def _cobalt_youtube(url: str, quality: str = "1080") -> list:
-    """Formatos de YouTube (video muxeado + audio mp3) vía cobalt."""
+    """Formatos de YouTube (video muxeado + audio mp3) vía cobalt.
+
+    Los túneles caducan a los ~90 s de generarse, mucho antes de que el usuario
+    termine de mirar el resultado y decidir. Por eso se marcan como ephemeral:
+    el front no debe usar este stream_url, sino pedir uno nuevo a /api/link
+    justo al hacer clic. El stream_url va igual como respaldo.
+    """
     out = []
-    v = _cobalt({"url": url, "downloadMode": "auto", "videoQuality": quality})
+    v = _cobalt_link(url, "video", quality)
     if v:
         out.append({
             "quality":    f"MP4 · {quality}p",
@@ -133,8 +146,10 @@ def _cobalt_youtube(url: str, quality: str = "1080") -> list:
             "ext":        "mp4",
             "type":       "video",
             "filename":   v.get("filename", ""),
+            "ephemeral":  True,
+            "kind":       "video",
         })
-    a = _cobalt({"url": url, "downloadMode": "audio", "audioFormat": "mp3"})
+    a = _cobalt_link(url, "audio")
     if a:
         out.append({
             "quality":    "MP3 Audio",
@@ -142,6 +157,8 @@ def _cobalt_youtube(url: str, quality: str = "1080") -> list:
             "ext":        "mp3",
             "type":       "audio",
             "filename":   a.get("filename", ""),
+            "ephemeral":  True,
+            "kind":       "audio",
         })
     return out
 
@@ -259,6 +276,9 @@ def api_download(payload: dict = Body(...)):
         "extension": f.get("ext", "mp4"),
         "type":      f.get("type", "video"),
         "mediaType": f.get("type", "video"),
+        # ephemeral → el front debe pedir un enlace nuevo a /api/link al hacer clic
+        "ephemeral": bool(f.get("ephemeral")),
+        "kind":      f.get("kind", f.get("type", "video")),
     } for f in data.get("formats", []) if f.get("stream_url")]
 
     if not videos:
@@ -268,9 +288,33 @@ def api_download(payload: dict = Body(...)):
         "title":       data.get("title", ""),
         "thumbnail":   data.get("thumbnail", ""),
         "platform":    service,
+        "sourceUrl":   url,
         "downloadUrl": videos[0]["url"],
         "videos":      videos,
     }
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# /api/link  — enlace de descarga recién generado
+#
+# Los túneles de cobalt caducan a los ~90 s. Si se entregan al analizar, para
+# cuando el usuario hace clic ya no sirven y el navegador guarda 0 bytes.
+# El front llama aquí en el momento del clic.
+# ───────────────────────────────────────────────────────────────────────────
+@app.post("/api/link")
+def api_link(payload: dict = Body(...)):
+    url     = (payload.get("url") or "").strip()
+    kind    = (payload.get("kind") or "video").strip().lower()
+    quality = str(payload.get("quality") or "1080").replace("p", "") or "1080"
+
+    if not url:
+        raise HTTPException(400, "url requerido")
+
+    j = _cobalt_link(url, kind, quality)
+    if not j or not j.get("url"):
+        raise HTTPException(502, "No se pudo generar el enlace de descarga.")
+
+    return {"url": j["url"], "filename": j.get("filename", "")}
 
 
 # ───────────────────────────────────────────────────────────────────────────
