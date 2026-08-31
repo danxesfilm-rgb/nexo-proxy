@@ -46,6 +46,27 @@ const FAMILIES = {
     minDur:4, maxDur:15, autoDur:false,
     quality:['480p','720p'],
   },
+  /* Generación anterior: más barata (~$0.059/s a 1080p sin audio). Solo texto
+     e imagen → video, sin referencias de video/audio, y hasta 12s. */
+  'seedance-1.5-pro': {
+    id:'seedance-1.5-pro',
+    maxImages:2, maxVideos:0, maxAudios:0, maxAssets:2,
+    minDur:4, maxDur:12, autoDur:false,
+    quality:['480p','720p','1080p'],
+    routes:['text-to-video','image-to-video'],
+    idFallback:true,
+  },
+  /* Wan 3.0 (Alibaba, ago-2026). Mismo endpoint y misma key de EvoLink que
+     Seedance, pero nombra la ruta de referencias «reference-video» → routeIds.
+     30s nativos, 1080p y audio en la misma pasada. No tiene video-edit. */
+  'wan-3.0': {
+    id:'wan3.0',
+    maxImages:10, maxVideos:5, maxAudios:5, maxAssets:20,
+    minDur:2, maxDur:30, autoDur:true,
+    quality:['480p','720p','1080p'],
+    routes:['text-to-video','image-to-video','reference-to-video'],
+    routeIds:{ 'reference-to-video':'reference-video' },
+  },
 };
 const DEFAULT_FAMILY = process.env.SEEDANCE_DEFAULT_MODEL || 'seedance-2.0';
 const ROUTES = ['text-to-video','image-to-video','reference-to-video'];
@@ -137,7 +158,8 @@ export default async function handler(req, res){
 
       /* Ruta: la elige el cliente o se deduce de las entradas.
          sin archivos → texto · 1 imagen → imagen · resto → referencia */
-      let route = ROUTES.includes(b.route) ? b.route : null;
+      const famRoutes = fam.routes || ROUTES;
+      let route = famRoutes.includes(b.route) ? b.route : null;
       if(!route){
         if(video_urls.length || audio_urls.length || image_urls.length > 1) route = 'reference-to-video';
         else if(image_urls.length === 1) route = 'image-to-video';
@@ -147,7 +169,11 @@ export default async function handler(req, res){
       if(route !== 'reference-to-video' && (video_urls.length || audio_urls.length)){
         route = 'reference-to-video';
       }
-      const modelId = `${fam.id}-${route}`;
+      // familias sin reference-to-video (1.5 Pro): las imágenes van por image-to-video
+      if(!famRoutes.includes(route)){
+        route = image_urls.length ? 'image-to-video' : 'text-to-video';
+      }
+      const modelId = `${fam.id}-${(fam.routeIds && fam.routeIds[route]) || route}`;
 
       /* Parámetros */
       const ratio = RATIOS.includes(String(aspectRatio)) ? aspectRatio : 'adaptive';
@@ -155,7 +181,8 @@ export default async function handler(req, res){
       if((duration === -1 || duration === 'auto') && fam.autoDur){
         dur = -1;                                  // el modelo elige y se factura lo real
       }else{
-        dur = Math.min(fam.maxDur, Math.max(fam.minDur, parseInt(duration) || 5));
+        const maxDur = (fam.routeMaxDur && fam.routeMaxDur[route]) || fam.maxDur;
+        dur = Math.min(maxDur, Math.max(fam.minDur, parseInt(duration) || 5));
       }
       const q = String(resolution || '720p').toLowerCase();
       const quality = fam.quality.includes(q) ? q : fam.quality[fam.quality.length-1];
@@ -174,19 +201,31 @@ export default async function handler(req, res){
       if(audio_urls.length) body.audio_urls = audio_urls;
       if(seed !== undefined && seed !== null && seed !== '') body.seed = parseInt(seed);
 
-      const r = await fetch(`${API_BASE}/v1/videos/generations`, {
-        method:'POST',
-        headers:{ ...auth, 'Content-Type':'application/json' },
-        body: JSON.stringify(body)
-      });
-      const d = await r.json();
+      const send = async id => {
+        const rr = await fetch(`${API_BASE}/v1/videos/generations`, {
+          method:'POST',
+          headers:{ ...auth, 'Content-Type':'application/json' },
+          body: JSON.stringify({ ...body, model:id })
+        });
+        return { r:rr, d: await rr.json() };
+      };
+
+      /* EvoLink no documenta si 1.5 Pro lleva la ruta en el id (como 2.x) o si
+         es un id único. Si el primero no existe, se reintenta con el id pelado. */
+      let usedId = modelId;
+      let { r, d } = await send(usedId);
+      if(!r.ok && fam.idFallback && usedId !== fam.id &&
+         /model|not found|unsupported|unknown|invalid/i.test(String(d.error?.message || d.message || ''))){
+        usedId = fam.id;
+        ({ r, d } = await send(usedId));
+      }
       if(!r.ok){
         const msg = d.error?.message || d.message || ('EvoLink '+r.status);
-        return res.status(r.status).json({ error: `${msg} (modelo: ${modelId})` });
+        return res.status(r.status).json({ error: `${msg} (modelo: ${usedId})` });
       }
       const taskId = d.id;
       if(!taskId) return res.status(502).json({ error:'EvoLink no devolvió id de tarea' });
-      return res.status(200).json({ taskId, model:modelId });
+      return res.status(200).json({ taskId, model:usedId });
     }
 
     return res.status(405).json({ error:'Method not allowed' });
