@@ -20,7 +20,7 @@ const API_BASE = process.env.EVOLINK_BASE || 'https://api.evolink.ai';
 const KEY      = process.env.EVOLINK_KEY || process.env.SEEDANCE_KEY;
 
 /* Familias disponibles. El ID final se arma como `${familia}-${ruta}`,
-   p. ej. seedance-2.0-mini-reference-to-video */
+   p. ej. seedance-2.0-reference-to-video */
 const FAMILIES = {
   'seedance-2.5': {
     id:'seedance-2.5',
@@ -36,12 +36,6 @@ const FAMILIES = {
   },
   'seedance-2.0-fast': {
     id:'seedance-2.0-fast',
-    maxImages:9, maxVideos:3, maxAudios:3, maxAssets:15,
-    minDur:4, maxDur:15, autoDur:false,
-    quality:['480p','720p'],
-  },
-  'seedance-2.0-mini': {
-    id:'seedance-2.0-mini',
     maxImages:9, maxVideos:3, maxAudios:3, maxAssets:15,
     minDur:4, maxDur:15, autoDur:false,
     quality:['480p','720p'],
