@@ -6,6 +6,7 @@
 import express from 'express';
 import klingHandler      from './api/kling.js';
 import seedanceHandler   from './api/seedance.js';
+import freepikHandler    from './api/freepik.js';
 import veoHandler        from './api/veo.js';
 import nanobanaHandler   from './api/nanobanana.js';
 import statusHandler     from './api/status.js';
@@ -35,6 +36,7 @@ app.options('*', (req, res) => {
 
 app.all('/api/kling',      route(klingHandler));
 app.all('/api/seedance',   route(seedanceHandler));
+app.all('/api/freepik',    route(freepikHandler));
 app.all('/api/veo',        route(veoHandler));
 app.all('/api/nanobanana', route(nanobanaHandler));
 app.all('/api/status',     route(statusHandler));
