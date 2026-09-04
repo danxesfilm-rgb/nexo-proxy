@@ -75,11 +75,13 @@ export default async function handler(req, res){
     if(req.method === 'GET'){
       const { taskId, family, resolution } = req.query;
       if(!taskId) return res.status(400).json({ error:'Falta taskId' });
-      const path = endpointFor(family, resolution);
+      // DEBUG: statusPath permite probar la ruta de estado exacta; _raw devuelve la respuesta cruda
+      const path = req.query.statusPath || endpointFor(family, resolution);
       if(!path) return res.status(400).json({ error:`Familia desconocida: ${family}` });
 
       const r = await fetch(`${API}/${path}/${encodeURIComponent(taskId)}`, { headers: auth });
       const d = await r.json().catch(() => ({}));
+      if(req.query._raw) return res.status(200).json({ _httpStatus:r.status, raw:d });
       if(!r.ok) return res.status(r.status).json({ error: d.message || d.error || `Freepik poll ${r.status}` });
 
       const st = String(d.data?.status || d.status || '').toUpperCase();
@@ -98,7 +100,8 @@ export default async function handler(req, res){
     if(req.method === 'POST'){
       const b = req.body || {};
       const { family, prompt, aspectRatio, resolution, duration, seed } = b;
-      const path = endpointFor(family, resolution);
+      // DEBUG: pathOverride prueba un slug exacto; _raw devuelve la respuesta cruda de Freepik
+      const path = b.pathOverride || endpointFor(family, resolution);
       if(!path) return res.status(400).json({ error:`Familia desconocida: ${family}. Use nano-banana | kling | seedance` });
       if(!prompt) return res.status(400).json({ error:'Falta el prompt' });
 
@@ -130,6 +133,7 @@ export default async function handler(req, res){
         body: JSON.stringify(body)
       });
       const d = await r.json().catch(() => ({}));
+      if(b._raw) return res.status(200).json({ _httpStatus:r.status, path, raw:d });
       if(!r.ok) return res.status(r.status).json({ error: d.message || d.error || `Freepik ${r.status} (${path})` });
 
       const taskId = d.data?.task_id || d.data?.id || d.task_id || d.id;
