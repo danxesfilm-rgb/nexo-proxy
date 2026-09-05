@@ -25,7 +25,7 @@ const KEY  = process.env.KIE_API_KEY;
 const ALLOWED_MODELS = new Set([
   'google/nano-banana',
   'google/nano-banana-pro',
-  'gpt-image-2/text-to-image',
+  'gpt-image-2-text-to-image',
   'grok-imagine/text-to-image'
 ]);
 
@@ -80,7 +80,8 @@ export default async function handler(req, res){
       const model = b.modelOverride || b.model;
       const { prompt } = b;
       if(!model)  return res.status(400).json({ error:'Falta el modelo (kie id)' });
-      if(!ALLOWED_MODELS.has(model)) return res.status(400).json({ error:'KIE solo está habilitado para Google, GPT y Grok en este studio.' });
+      // modelOverride (debug) salta la lista blanca para calibrar ids
+      if(!b.modelOverride && !ALLOWED_MODELS.has(model)) return res.status(400).json({ error:'KIE solo está habilitado para Google, GPT y Grok en este studio.' });
       if(!prompt) return res.status(400).json({ error:'Falta el prompt' });
 
       let refs = Array.isArray(b.refs) ? b.refs.filter(Boolean) : [];
@@ -88,6 +89,9 @@ export default async function handler(req, res){
       const image_urls = refs.filter(isHttp);   // KIE requiere URLs públicas
 
       const input = { prompt };
+      // aspect_ratio: obligatorio en algunos modelos (Grok), opcional en otros
+      const AR = ['auto','1:1','3:2','2:3','4:3','3:4','16:9','9:16','21:9','2:1','1:2'];
+      if(b.aspectRatio && AR.includes(String(b.aspectRatio))) input.aspect_ratio = String(b.aspectRatio);
       if(image_urls.length) input.image_urls = image_urls;
 
       const r = await fetch(`${BASE}/createTask`, {
