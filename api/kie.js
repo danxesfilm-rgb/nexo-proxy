@@ -90,9 +90,21 @@ export default async function handler(req, res){
 
       const input = { prompt };
       // aspect_ratio: obligatorio en algunos modelos (Grok), opcional en otros
-      const AR = ['auto','1:1','3:2','2:3','4:3','3:4','16:9','9:16','21:9','2:1','1:2'];
+      const AR = ['auto','1:1','3:2','2:3','4:3','3:4','5:4','4:5','16:9','9:16','21:9','9:21','2:1','1:2','3:1','1:3'];
       if(b.aspectRatio && AR.includes(String(b.aspectRatio))) input.aspect_ratio = String(b.aspectRatio);
-      if(image_urls.length) input.image_urls = image_urls;
+
+      // OJO: cada modelo nombra distinto el campo de imágenes de referencia.
+      //  · GPT Image 2 (image-to-image) → input_urls (hasta 16)
+      //  · Nano Banana / Grok            → image_urls
+      // Enviar el nombre equivocado hace que el modelo IGNORE las referencias.
+      const useInputUrls = /^gpt-image-2/.test(model);
+      if(image_urls.length){
+        if(useInputUrls) input.input_urls = image_urls;
+        else             input.image_urls = image_urls;
+      }
+      // resolution: GPT Image 2 la admite (1K/2K/4K); otros modelos no la usan
+      const RES = ['1K','2K','4K'];
+      if(useInputUrls && b.resolution && RES.includes(String(b.resolution))) input.resolution = String(b.resolution);
 
       const r = await fetch(`${BASE}/createTask`, {
         method:'POST',
