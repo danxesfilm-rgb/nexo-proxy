@@ -26,7 +26,9 @@ const ALLOWED_MODELS = new Set([
   'google/nano-banana',
   'nano-banana-pro',
   'gpt-image-2-text-to-image',
-  'grok-imagine/text-to-image'
+  'gpt-image-2-image-to-image',      // edición
+  'grok-imagine/text-to-image',
+  'grok-imagine/image-to-image'       // edición
 ]);
 
 const isHttp = u => /^https?:\/\//i.test(String(u || ''));
