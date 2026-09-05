@@ -13,6 +13,7 @@ export default function handler(req, res){
     seedance: !!(process.env.EVOLINK_KEY || process.env.SEEDANCE_KEY),
     kling:    !!process.env.KLING_API_KEY,
     freepik:  !!process.env.FREEPIK_API_KEY,   // Magnific (Nano Banana · Kling · Seedance)
+    kie:      !!process.env.KIE_API_KEY,        // KIE (todas las imágenes)
     cleanup:  !!(process.env.BRIA_API_KEY || process.env.REPLICATE_API_TOKEN),
     bria:     !!process.env.BRIA_API_KEY,
     replicate:!!process.env.REPLICATE_API_TOKEN,
