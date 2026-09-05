@@ -84,11 +84,18 @@ export default async function handler(req, res){
   if(!GEMINI_KEY)              return res.status(500).json({ error:'Falta GEMINI_API_KEY en el servidor' });
 
   try{
-    const { prompt, type } = req.body || {};
+    const { prompt, type, styles } = req.body || {};
     if(!prompt || typeof prompt !== 'string') return res.status(400).json({ error:'Falta el prompt' });
     if(prompt.length > 4000)                  return res.status(400).json({ error:'Prompt demasiado largo' });
 
-    const system = SYSTEM[type === 'video' ? 'video' : 'image'];
+    let system = SYSTEM[type === 'video' ? 'video' : 'image'];
+    // Si el usuario adjunta una referencia de estilo, el enhancer NO debe
+    // imponer un estilo propio (p. ej. "fotorrealista"): la estética la marca
+    // esa referencia. Se añade una regla extra al system prompt.
+    if(Array.isArray(styles) && styles.length){
+      const names = styles.map(s => String(s)).slice(0, 6).join(', ');
+      system += `\n- El usuario adjunta una referencia de ESTILO visual (${names}). NO impongas ni menciones ningún estilo fotográfico o "fotorrealista": la estética vendrá de esa referencia. No describas el estilo; céntrate en la escena, el sujeto y la composición.`;
+    }
 
     let lastErr;
     for(const model of MODELS){
