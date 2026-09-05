@@ -16,8 +16,8 @@
      { model, prompt, refs?[], aspectRatio?, resolution? }
    GET  ?taskId=..   -> { status:'done'|'processing'|'failed', url? }
 
-   NOTA: los ids de modelo (google/nano-banana, grok-imagine/…, etc.) hay que
-   confirmarlos con la key real; por eso queda `_raw`/`modelOverride` de debug.
+   Modelos habilitados: google/nano-banana · nano-banana-pro ·
+   gpt-image-2-text-to-image · grok-imagine/text-to-image (lista blanca).
    ============================================================ */
 
 const BASE = process.env.KIE_BASE || 'https://api.kie.ai/api/v1/jobs';
@@ -58,7 +58,6 @@ export default async function handler(req, res){
       if(!taskId) return res.status(400).json({ error:'Falta taskId' });
       const r = await fetch(`${BASE}/recordInfo?taskId=${encodeURIComponent(taskId)}`, { headers: auth });
       const d = await r.json().catch(() => ({}));
-      if(req.query._raw) return res.status(200).json({ _httpStatus:r.status, raw:d });
       if(!r.ok) return res.status(r.status).json({ error: d.msg || d.message || `KIE poll ${r.status}` });
 
       const data = d.data || {};
@@ -77,11 +76,10 @@ export default async function handler(req, res){
     /* ── START ── */
     if(req.method === 'POST'){
       const b = req.body || {};
-      const model = b.modelOverride || b.model;
+      const model = b.model;
       const { prompt } = b;
       if(!model)  return res.status(400).json({ error:'Falta el modelo (kie id)' });
-      // modelOverride (debug) salta la lista blanca para calibrar ids
-      if(!b.modelOverride && !ALLOWED_MODELS.has(model)) return res.status(400).json({ error:'KIE solo está habilitado para Google, GPT y Grok en este studio.' });
+      if(!ALLOWED_MODELS.has(model)) return res.status(400).json({ error:'KIE solo está habilitado para Google, GPT y Grok en este studio.' });
       if(!prompt) return res.status(400).json({ error:'Falta el prompt' });
 
       let refs = Array.isArray(b.refs) ? b.refs.filter(Boolean) : [];
@@ -100,7 +98,6 @@ export default async function handler(req, res){
         body: JSON.stringify({ model, input })
       });
       const d = await r.json().catch(() => ({}));
-      if(b._raw) return res.status(200).json({ _httpStatus:r.status, raw:d });
       if(!r.ok || (d.code && d.code !== 200)){
         return res.status(r.ok ? 400 : r.status).json({ error: d.msg || d.message || `KIE ${r.status} (${model})` });
       }
