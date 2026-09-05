@@ -24,7 +24,7 @@ const BASE = process.env.KIE_BASE || 'https://api.kie.ai/api/v1/jobs';
 const KEY  = process.env.KIE_API_KEY;
 const ALLOWED_MODELS = new Set([
   'google/nano-banana',
-  'google/nano-banana-pro',
+  'nano-banana-pro',
   'gpt-image-2-text-to-image',
   'grok-imagine/text-to-image'
 ]);
