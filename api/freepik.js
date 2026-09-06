@@ -10,14 +10,15 @@
    status: CREATED · IN_PROGRESS · COMPLETED · FAILED
 
    OJO (quirks confirmados con la key real):
-     · Kling: POST usa "kling-v2-6-pro" pero el ESTADO usa "kling-v2-6".
+     · Kling 2.6: POST usa "kling-v2-6-pro" pero el ESTADO usa "kling-v2-6".
+     · Kling 2.5: POST y ESTADO comparten "kling-v2-5-pro" (ambos CON "-pro").
      · Kling exige "duration".
-     · Kling 2.6 Pro admite texto→video E imagen→video.
+     · Kling 2.5/2.6 Pro admiten texto→video E imagen→video.
      · Nano Banana Pro: POST y estado comparten "nano-banana-pro".
      · Las URLs del resultado son temporales (token) → rehospedar en el front.
 
    POST body (desde el navegador):
-     { family:'kling'|'nano-banana', prompt, image?, refs?[], aspectRatio?, duration?, seed? }
+     { family:'kling-2.5'|'kling-2.6'|'nano-banana', prompt, image?, refs?[], aspectRatio?, duration?, seed? }
    GET  ?taskId=..&family=..    -> { status:'done'|'processing'|'failed', url? }
    ============================================================ */
 
@@ -26,11 +27,15 @@ const KEY = process.env.FREEPIK_API_KEY;
 
 /* Ruta del POST y del estado por familia (Kling difiere en el estado). */
 const POST_PATH = {
-  'kling':       'image-to-video/kling-v2-6-pro',
+  'kling-2.5':   'image-to-video/kling-v2-5-pro',
+  'kling-2.6':   'image-to-video/kling-v2-6-pro',
+  'kling':       'image-to-video/kling-v2-6-pro',  // alias antiguo → 2.6 (compatibilidad)
   'nano-banana': 'text-to-image/nano-banana-pro',
 };
 const STATUS_PATH = {
-  'kling':       'image-to-video/kling-v2-6',      // el estado va SIN "-pro"
+  'kling-2.5':   'image-to-video/kling-v2-5-pro',  // 2.5: el estado va CON "-pro"
+  'kling-2.6':   'image-to-video/kling-v2-6',      // 2.6: el estado va SIN "-pro"
+  'kling':       'image-to-video/kling-v2-6',      // alias antiguo → 2.6
   'nano-banana': 'text-to-image/nano-banana-pro',
 };
 
@@ -95,7 +100,7 @@ export default async function handler(req, res){
       const b = req.body || {};
       const { family, prompt, aspectRatio, duration, seed } = b;
       const path = POST_PATH[family];
-      if(!path) return res.status(400).json({ error:`Familia desconocida: ${family}. Use kling | nano-banana` });
+      if(!path) return res.status(400).json({ error:`Familia desconocida: ${family}. Use kling-2.5 | kling-2.6 | nano-banana` });
       if(!prompt) return res.status(400).json({ error:'Falta el prompt' });
 
       // imagen(es) de entrada: base64 (con o sin prefijo) o URL pública
@@ -108,8 +113,8 @@ export default async function handler(req, res){
       if(family === 'nano-banana'){
         // Nano Banana Pro (Gemini image): prompt + hasta 3 imágenes de referencia
         if(refs.length) body.reference_images = refs.slice(0, 3).map(asAsset);
-      }else if(family === 'kling'){
-        // Kling 2.6 Pro: texto→video o imagen→video. duration es obligatorio.
+      }else if(family && family.startsWith('kling')){
+        // Kling (2.5 Pro / 2.6 Pro): texto→video o imagen→video. duration es obligatorio.
         body.duration = String(parseInt(duration) || 5);
         const ratio = RATIO[String(aspectRatio)];
         if(ratio) body.aspect_ratio = ratio;
