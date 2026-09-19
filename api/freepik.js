@@ -11,7 +11,8 @@
 
    OJO (quirks confirmados con la key real):
      · Kling 2.6: POST usa "kling-v2-6-pro" pero el ESTADO usa "kling-v2-6".
-     · Kling 2.5: POST y ESTADO comparten "kling-v2-5-pro" (ambos CON "-pro").
+     · Kling 2.5: usamos "kling-v2-5-720p" (720p, más barato); POST y ESTADO comparten slug.
+       (existe también "kling-v2-5-pro" = 1080p, mismo body, más caro.)
      · Kling exige "duration".
      · Kling 2.5/2.6 Pro admiten texto→video E imagen→video.
      · Nano Banana Pro: POST y estado comparten "nano-banana-pro".
@@ -27,13 +28,13 @@ const KEY = process.env.FREEPIK_API_KEY;
 
 /* Ruta del POST y del estado por familia (Kling difiere en el estado). */
 const POST_PATH = {
-  'kling-2.5':   'image-to-video/kling-v2-5-pro',
+  'kling-2.5':   'image-to-video/kling-v2-5-720p',  // 2.5 en 720p → más barato que el pro (1080p)
   'kling-2.6':   'image-to-video/kling-v2-6-pro',
   'kling':       'image-to-video/kling-v2-6-pro',  // alias antiguo → 2.6 (compatibilidad)
   'nano-banana': 'text-to-image/nano-banana-pro',
 };
 const STATUS_PATH = {
-  'kling-2.5':   'image-to-video/kling-v2-5-pro',  // 2.5: el estado va CON "-pro"
+  'kling-2.5':   'image-to-video/kling-v2-5-720p',  // 2.5: estado comparte slug (mismo patrón que el pro)
   'kling-2.6':   'image-to-video/kling-v2-6',      // 2.6: el estado va SIN "-pro"
   'kling':       'image-to-video/kling-v2-6',      // alias antiguo → 2.6
   'nano-banana': 'text-to-image/nano-banana-pro',
