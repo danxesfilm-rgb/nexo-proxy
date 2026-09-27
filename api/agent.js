@@ -88,7 +88,9 @@ const TONOS = {
   storytelling: 'storytelling: una historia con personaje, conflicto y desenlace',
 };
 // Línea para el prompt; 'auto' o desconocido = el agente elige el tono que mejor funcione
-const tonoLine = t => TONOS[t] ? `Tono obligatorio: ${TONOS[t]}.` : 'Tono: elige el que mejor funcione para este nicho y plataforma.';
+const tonoLine = t => TONOS[t] ? `Tono obligatorio: ${TONOS[t]}.` : 'Tono y enfoque: respeta al pie de la letra los que el usuario haya escrito en su petición; si no indica ninguno, elige el que mejor funcione para ese nicho.';
+// Petición original del usuario (trae su tono/enfoque); se repite en guion y ajustes
+const pedidoLine = p => p ? `Petición original del usuario (respeta su tono, público y enfoque): "${str(p, 600)}"\n` : '';
 
 /* Lo que sabe el agente sobre viralidad. Se inyecta en todas las tareas creativas. */
 const PLAYBOOK = `
@@ -189,7 +191,7 @@ function buildGuion(b){
 
   const prompt = `Título del video: "${titulo}"
 Tema: "${str(idea.tema, 300)}". Por qué es viral: "${str(idea.gancho, 400)}"
-${idea.apertura ? `Apertura sugerida (mejórala si puedes): "${str(idea.apertura, 300)}"\n` : ''}Formato: ${P.desc}.
+${idea.apertura ? `Apertura sugerida (mejórala si puedes): "${str(idea.apertura, 300)}"\n` : ''}${pedidoLine(b.pedido)}Formato: ${P.desc}.
 ${tonoLine(b.tono)}
 Duración objetivo: ${durLabel(dur)} (${dur} s ≈ ${palabras} palabras de narración).
 ${P.long
@@ -212,7 +214,7 @@ function buildRefinar(b){
 
   const prompt = `Título: "${str(b.titulo, 300)}"
 Formato: ${P.desc}. Duración objetivo: ${durLabel(dur)}.
-${tonoLine(b.tono)}
+${pedidoLine(b.pedido)}${tonoLine(b.tono)}
 Concepto actual: ${str(b.concepto, 2000)}
 Guion actual:
 ${guion}
