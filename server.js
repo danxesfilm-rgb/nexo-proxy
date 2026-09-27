@@ -17,6 +17,7 @@ import downloadHandler   from './api/download.js';
 import transcribeHandler from './api/transcribe.js';
 import trendsHandler     from './api/trends.js';
 import promptHandler     from './api/prompt.js';
+import agentHandler      from './api/agent.js';
 import cleanupHandler    from './api/cleanup.js';
 import upscaleHandler    from './api/upscale.js';
 import removebgHandler   from './api/removebg.js';
@@ -48,11 +49,19 @@ app.all('/api/download',   route(downloadHandler));
 app.all('/api/transcribe', route(transcribeHandler));
 app.all('/api/trends',     route(trendsHandler));
 app.all('/api/prompt',     route(promptHandler));
+app.all('/api/agent',      route(agentHandler));
 app.all('/api/cleanup',    route(cleanupHandler));
 app.all('/api/upscale',    route(upscaleHandler));
 app.all('/api/removebg',   route(removebgHandler));
 
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'nexo-proxy', host: 'render' }));
+
+// 404 con CORS: sin esta cabecera el navegador lo reporta como fallo de red
+// y el cliente no puede distinguir 'ruta no desplegada' de 'servidor caído'
+app.use((req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.status(404).json({ error: 'Ruta no encontrada en el proxy: ' + req.path });
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`NEXO Proxy activo en puerto ${PORT}`));
