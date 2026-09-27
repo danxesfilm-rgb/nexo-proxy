@@ -23,6 +23,7 @@
    sabe hacer estas tareas y no queda como un LLM abierto a cualquiera.
    ============================================================ */
 import { fetchNews } from './trends.js';
+import { prepararVideo, buildAnalizar, buildReplicar } from './agent-video.js';
 
 const GEMINI_KEY = process.env.GEMINI_TEXT_KEY || process.env.GEMINI_API_KEY;
 
@@ -286,7 +287,8 @@ Responde SOLO este JSON, con un elemento en "por_red" por cada red y en ese orde
   return { system, prompt, json: true, maxTokens: 4096 + P.redes.length * 1024, temperature: 0.7 };
 }
 
-const TASKS = { ideas: buildIdeas, guion: buildGuion, refinar: buildRefinar, prompts: buildPrompts, extras: buildExtras };
+const TASKS = { ideas: buildIdeas, guion: buildGuion, refinar: buildRefinar, prompts: buildPrompts, extras: buildExtras,
+                replicar: buildReplicar, analizar: () => null /* necesita preparar el video: se arma en el handler */ };
 
 function badReq(msg){ const e = new Error(msg); e.status = 400; return e; }
 
@@ -294,7 +296,7 @@ function badReq(msg){ const e = new Error(msg); e.status = 400; return e; }
 async function askGemini(model, t){
   const body = {
     system_instruction: { parts: [{ text: t.system }] },
-    contents: [{ role: 'user', parts: [{ text: t.prompt }] }],
+    contents: [{ role: 'user', parts: [ ...(t.media || []), { text: t.prompt } ] }],
     // holgado: los modelos 3.x razonan antes de responder y un tope corto devuelve texto vacío
     generationConfig: { maxOutputTokens: t.maxTokens, temperature: t.temperature },
   };
@@ -383,6 +385,7 @@ export default async function handler(req, res){
         busquedas: news.length ? [`Google News: ${tema}`] : [],
         investigacion: news.length ? 'noticias' : 'ninguna' });
     }
+    if(body.task === 'analizar') t = buildAnalizar(body, await prepararVideo(body.video));
     const { data } = await runModels(t);
     return res.status(200).json(data);
   }catch(lastErr){
@@ -411,7 +414,8 @@ async function runModels(t){
 }
 
 function sendError(res, lastErr){
-  const status = lastErr?.status === 429 ? 429 : (lastErr?.status === 502 ? 502 : 500);
+  // los 4xx propios (video muy pesado, enlace no válido…) llegan tal cual al usuario
+  const status = [400, 413, 422, 429, 502].includes(lastErr?.status) ? lastErr.status : 500;
   const msg = lastErr?.status === 429
     ? 'Se agotó la cuota de Gemini por ahora. Prueba en unos minutos.'
     : (lastErr?.message || 'El agente no pudo responder');
