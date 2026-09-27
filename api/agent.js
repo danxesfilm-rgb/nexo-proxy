@@ -22,7 +22,14 @@
    Los system prompts viven aquí y no en el navegador: el endpoint solo
    sabe hacer estas tareas y no queda como un LLM abierto a cualquiera.
    ============================================================ */
+import { fetchNews } from './trends.js';
+
 const GEMINI_KEY = process.env.GEMINI_TEXT_KEY || process.env.GEMINI_API_KEY;
+
+// La búsqueda de Google de Gemini tiene cuota propia (en la capa gratuita se agota o no existe).
+// Tras un 429 se deja de intentar un rato y se usan titulares de Google News (plan B).
+const SEARCH_PAUSE_MS = 15 * 60 * 1000;
+let searchBlockedUntil = 0;
 
 // Si un modelo no existe (404), se queda sin cuota (429) o está saturado (5xx), se prueba el siguiente
 const MODELS = [
@@ -117,18 +124,23 @@ const int = (v, min, max, def) => {
 const durLabel = s => s >= 60 ? `${Math.round(s / 60)} min` : `${s}s`;
 
 /* ── Construcción de cada tarea ─────────────────────── */
-function buildIdeas(b){
+// news = titulares de Google News (plan B); si viene, se usan en lugar de la búsqueda de Gemini
+function buildIdeas(b, news){
   const tema = str(b.tema, 600).trim();
   if(!tema) throw badReq('Falta el tema');
   const P    = platInfo(b);
   const lang = LANG[b.lang] ? b.lang : 'es-LA';
   const dur  = int(b.dur, 5, 1800, P.long ? 480 : 30);
-  const web  = b.investigar !== false;
+  const web  = b.investigar !== false && !news;
+  const titulares = news && news.length
+    ? '\nTITULARES REALES DE ESTOS DÍAS sobre el nicho (Google News). Úsalos como base de las tendencias; no inventes otras:\n'
+      + news.map(n => '- ' + n.title).join('\n') + '\n'
+    : '';
 
   const system = `Eres un estratega de contenido viral que optimiza la producción diaria para YouTube y redes sociales. Hoy es ${fechaHoy()}.
 ${web
   ? 'USA LA BÚSQUEDA DE GOOGLE para descubrir qué es tendencia ESTOS DÍAS en el nicho (noticias, conversaciones, videos que están explotando). Básate en resultados reales y recientes; no inventes tendencias.'
-  : 'Usa tu conocimiento; genera ideas frescas y no cites años viejos.'}
+  : news ? 'Basa las ideas en los titulares reales que te paso: son lo que es tendencia hoy.' : 'Usa tu conocimiento; genera ideas frescas y no cites años viejos.'}
 ${PLAYBOOK}
 ${SCORE_RULES}
 Escribes en ${LANG[lang]}. Respondes SOLO con JSON válido, sin texto extra, sin markdown, sin enlaces ni marcas de cita.`;
@@ -137,7 +149,7 @@ Escribes en ${LANG[lang]}. Respondes SOLO con JSON válido, sin texto extra, sin
 Formato: ${P.desc}.
 Duración del video: ${durLabel(dur)}. Las ideas deben poder contarse bien en ese tiempo (en poco tiempo, una sola idea potente; en mucho, temas con desarrollo).
 ${tonoLine(b.tono)}
-${web ? 'Investiga qué es TENDENCIA HOY sobre este nicho y dame' : 'Dame'} 5 TEMAS distintos con alto potencial viral. Por cada tema:
+${titulares}${web || news ? 'A partir de lo que es TENDENCIA HOY en este nicho, dame' : 'Dame'} 5 TEMAS distintos con alto potencial viral. Por cada tema:
 - "gancho": por qué es viral AHORA, en una frase (menciona la tendencia real si la hay).
 - "apertura": la frase exacta de los primeros 3 segundos del video.
 - "formato": el formato viral que mejor le va (POV, ranking, mito vs realidad, storytime...).
@@ -349,6 +361,35 @@ export default async function handler(req, res){
   try{ t = build(body); }
   catch(e){ return res.status(e.status || 400).json({ error: e.message }); }
 
+  try{
+    // Ideas con investigación: primero la búsqueda de Gemini; si no hay cuota, plan B con Google News
+    if(body.task === 'ideas' && t.search){
+      if(Date.now() >= searchBlockedUntil){
+        try{
+          const { data, g } = await runModels(t);
+          return res.status(200).json({ ...data, fuentes: g.fuentes, busquedas: g.busquedas, investigacion: 'google' });
+        }catch(e){
+          if(e.status !== 429) throw e;
+          searchBlockedUntil = Date.now() + SEARCH_PAUSE_MS;
+        }
+      }
+      const tema = str(body.tema, 200).trim();
+      const news = await fetchNews(tema, body.lang, 12).catch(() => []);
+      const { data } = await runModels(buildIdeas(body, news.length ? news : null));
+      return res.status(200).json({ ...data,
+        fuentes: news.slice(0, 8).map(n => ({ title: n.source || 'Google News', uri: n.link })),
+        busquedas: news.length ? [`Google News: ${tema}`] : [],
+        investigacion: news.length ? 'noticias' : 'ninguna' });
+    }
+    const { data } = await runModels(t);
+    return res.status(200).json(data);
+  }catch(lastErr){
+    return sendError(res, lastErr);
+  }
+}
+
+/* Prueba los modelos en orden y devuelve el JSON ya parseado */
+async function runModels(t){
   let lastErr;
   for(const model of MODELS){
     try{
@@ -356,15 +397,18 @@ export default async function handler(req, res){
       let data;
       try{ data = parseJSON(g.text); }
       catch(e){ const err = new Error('El agente devolvió un formato inválido, reintenta.'); err.status = 502; throw err; }
-      if(body.task === 'ideas'){ data.fuentes = g.fuentes; data.busquedas = g.busquedas; }
       data.model = model;
-      return res.status(200).json(data);
+      return { data, g };
     }catch(e){
       lastErr = e;
       // 404 = modelo retirado · 429 = sin cuota · 5xx = saturado → probar el siguiente
       if(!(e.status === 404 || e.status === 429 || (e.status >= 500 && e.status !== 502))) break;
     }
   }
+  throw lastErr;
+}
+
+function sendError(res, lastErr){
   const status = lastErr?.status === 429 ? 429 : (lastErr?.status === 502 ? 502 : 500);
   const msg = lastErr?.status === 429
     ? 'Se agotó la cuota de Gemini por ahora. Prueba en unos minutos.'

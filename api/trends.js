@@ -20,6 +20,29 @@ function decode(s){
     .trim();
 }
 
+/* Titulares de Google News sobre q. También lo usa agent.js como plan B
+   cuando la búsqueda de Google de Gemini no tiene cuota. */
+export async function fetchNews(q, lang, max = 12){
+  const r = REGION[lang] || REGION.es;
+  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=${r.hl}&gl=${r.gl}&ceid=${r.ceid}`;
+  const resp = await fetch(url, { headers:{ 'User-Agent':'Mozilla/5.0 (compatible; NexoBot/1.0)' } });
+  const xml = await resp.text();
+  const out = [];
+  for(const it of xml.split('<item>').slice(1)){
+    const m = it.match(/<title>([\s\S]*?)<\/title>/);
+    const t = m ? decode(m[1]) : '';
+    // Google News añade " - Fuente" al final; lo dejamos, da contexto de medio
+    if(t) out.push({
+      title:  t,
+      link:   decode((it.match(/<link>([\s\S]*?)<\/link>/) || [])[1]),
+      source: decode((it.match(/<source[^>]*>([\s\S]*?)<\/source>/) || [])[1]),
+      date:   decode((it.match(/<pubDate>([\s\S]*?)<\/pubDate>/) || [])[1]),
+    });
+    if(out.length >= max) break;
+  }
+  return out;
+}
+
 export default async function handler(req, res){
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -30,25 +53,8 @@ export default async function handler(req, res){
   try{
     const q = String(req.query.q || '').slice(0, 200).trim();
     if(!q) return res.status(400).json({ error:'Falta parámetro q' });
-    const r = REGION[req.query.lang] || REGION.es;
     const max = Math.min(parseInt(req.query.max || '12', 10) || 12, 20);
-
-    const url = `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=${r.hl}&gl=${r.gl}&ceid=${r.ceid}`;
-    const resp = await fetch(url, { headers:{ 'User-Agent':'Mozilla/5.0 (compatible; NexoBot/1.0)' } });
-    const xml = await resp.text();
-
-    // Extrae el <title> de cada <item>
-    const items = xml.split('<item>').slice(1);
-    const titles = [];
-    for(const it of items){
-      const m = it.match(/<title>([\s\S]*?)<\/title>/);
-      if(m){
-        let t = decode(m[1]);
-        // Google News añade " - Fuente" al final; lo dejamos, da contexto de medio
-        if(t) titles.push(t);
-      }
-      if(titles.length >= max) break;
-    }
+    const titles = (await fetchNews(q, req.query.lang, max)).map(n => n.title);
 
     res.setHeader('Cache-Control', 's-maxage=900, stale-while-revalidate=300');
     return res.status(200).json({ q, titles });
