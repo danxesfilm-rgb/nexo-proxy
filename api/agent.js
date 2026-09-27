@@ -232,7 +232,7 @@ function buildPrompts(b){
   const guion = str(b.guion, 30000).trim();
   if(!guion) throw badReq('Falta el guion');
   const P      = platInfo(b);
-  const nImgs  = int(b.nImgs, 0, 120, 0);
+  const nImgs  = int(b.nImgs, 0, 150, 0);
   const nClips = int(b.nClips, 0, 150, 0);
   if(!nImgs && !nClips) throw badReq('Pide imágenes o videos');
   const clip  = int(b.clip, 4, 10, 8);                         // segundos por clip (5 Kling/Seedance · 8 Veo · 10)
