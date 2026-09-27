@@ -235,22 +235,28 @@ function buildPrompts(b){
   const nImgs  = int(b.nImgs, 0, 120, 0);
   const nClips = int(b.nClips, 0, 150, 0);
   if(!nImgs && !nClips) throw badReq('Pide imágenes o videos');
+  const clip  = int(b.clip, 4, 10, 8);                         // segundos por clip (5 Kling/Seedance · 8 Veo · 10)
+  const dur   = int(b.dur, 5, 1800, nClips ? nClips * clip : nImgs * 10);
+  const tImg  = nImgs ? Math.max(2, Math.round(dur / nImgs)) : 0;
   const ratio = P.ratio;
   const QUALITY = 'cinematic, 4K, ultra-detailed, professional color grading, dramatic lighting, sharp focus, high production value';
 
   const want = [];
-  if(nImgs)  want.push(`"imgs": EXACTAMENTE ${nImgs} prompts de IMAGEN. Cada item {"n":1,"prompt":"...","necesita_ref":false,"ref_nota":""}. Marca necesita_ref=true SOLO si la escena requiere una foto real del usuario (producto, persona concreta, logo) y explica cuál en ref_nota (en español).`);
-  if(nClips) want.push(`"vids": EXACTAMENTE ${nClips} prompts de VIDEO para clips de máximo 8 s (Veo 3.1 / Kling / Seedance), con movimiento de cámara y acción concreta. Cada item {"n":1,"prompt":"..."}.`);
+  if(nImgs)  want.push(`"imgs": EXACTAMENTE ${nImgs} prompts de IMAGEN, uno cada ~${tImg} s del video. Cada item {"n":1,"desde":0,"hasta":${tImg},"voz":"frase del guion que suena en ese tramo","prompt":"...","necesita_ref":false,"ref_nota":""}. Marca necesita_ref=true SOLO si la escena requiere una foto real del usuario (producto, persona concreta, logo) y explica cuál en ref_nota (en español).`);
+  if(nClips) want.push(`"vids": EXACTAMENTE ${nClips} prompts de VIDEO, un clip de ${clip} s cada uno, consecutivos: el 1 va de 0 a ${clip} s, el 2 de ${clip} a ${clip*2} s… hasta cubrir los ${dur} s del video (el último puede sobrar un poco: se recorta al montar). Acción concreta que quepa en ${clip} s + movimiento de cámara. Cada item {"n":1,"desde":0,"hasta":${clip},"voz":"frase del guion que suena en ese tramo","prompt":"..."}.`);
+  if(nClips) want.push(`"respaldo": 2 prompts de VIDEO de ${clip} s de PLANOS DE RECURSO (b-roll: detalles, ambiente, reacciones) que encajen en cualquier momento del video, para tapar un clip que salga mal. Cada item {"n":"R1","uso":"dónde encaja (en español)","prompt":"..."}.`);
 
   const system = `Eres director de producción audiovisual para video viral. Conviertes un guion en prompts visuales en INGLÉS, siempre con calidad cine (${QUALITY}), encuadre ${ratio}.
 Reglas:
 - Primero define un "estilo_visual": personaje(s) con rasgos físicos y ropa precisos, paleta y estética. REPITE esa descripción del personaje literalmente en cada prompt donde aparezca, para que se vea igual en todas las escenas.
 - La escena 1 debe ser el GANCHO visual más potente (movimiento, contraste o sorpresa).
 - Varía planos (general, medio, detalle, cenital) para mantener el ritmo.
-- Nada de texto escrito dentro de la imagen salvo que el guion lo exija.
+- Nada de texto escrito dentro de la imagen salvo que el guion lo exija. No escribas relaciones de aspecto en los prompts.
+- Devuelve EXACTAMENTE el número de items pedido en cada lista: ni uno más ni uno menos.
 Respondes SOLO con JSON válido que contenga únicamente las claves pedidas.`;
 
   const prompt = `Título: "${str(b.titulo, 300)}"
+Duración total del video: ${dur} s.
 Guion:
 ${guion}
 
@@ -258,11 +264,60 @@ Cubre el guion completo en orden y genera:
 - "estilo_visual": una o dos frases en inglés (personaje + estética).
 - ${want.join('\n- ')}
 Cada prompt termina incorporando los descriptores de calidad.
-Responde SOLO este JSON: {"estilo_visual":"..."${nImgs ? ',"imgs":[...]' : ''}${nClips ? ',"vids":[...]' : ''}}`;
+Responde SOLO este JSON: {"estilo_visual":"..."${nImgs ? ',"imgs":[...]' : ''}${nClips ? ',"vids":[...],"respaldo":[...]' : ''}}`;
 
-  // ~90 tokens por prompt + margen para el razonamiento
-  const maxTokens = Math.min(65536, 4096 + (nImgs + nClips) * 160);
-  return { system, prompt, json: true, maxTokens, temperature: 0.7 };
+  // ~160 tokens por prompt (con tramo y voz) + margen para el razonamiento
+  const maxTokens = Math.min(65536, 4096 + (nImgs + nClips + 2) * 220);
+  return { system, prompt, json: true, maxTokens, temperature: 0.7, want:{ imgs:nImgs, vids:nClips }, clip, dur, tImg };
+}
+
+/* Gemini a veces devuelve menos prompts de los pedidos (o alguno de más):
+   se recorta lo que sobra y se pide en una segunda vuelta SOLO lo que falta. */
+async function completarPrompts(body, t, data){
+  for(const k of ['vids', 'imgs']){
+    const n = t.want[k]; if(!n) continue;
+    let arr = Array.isArray(data[k]) ? data[k].filter(x => x && x.prompt) : [];
+    if(arr.length < n){
+      const paso = k === 'vids' ? t.clip : t.tImg;
+      const hechos = arr.map((x, i) => `${i+1}. [${x.desde ?? i*paso}-${x.hasta ?? (i+1)*paso}s] ${str(x.voz, 120)}`).join('\n');
+      const falta = { ...t,
+        prompt: `Estilo visual fijo: ${str(data.estilo_visual, 600)}
+Guion:
+${str(body.guion, 30000)}
+
+Ya tienes estas ${arr.length} escenas de ${n} (${k === 'vids' ? 'clips de video de ' + t.clip + ' s' : 'imágenes'}):
+${hechos || '(ninguna)'}
+
+Genera SOLO las escenas ${arr.length + 1} a ${n}, que siguen el guion desde el segundo ${arr.length * paso} hasta el ${t.dur}. Mismo formato de item.
+Responde SOLO este JSON: {"${k}":[...]}`,
+      };
+      try{
+        const { data: extra } = await runModels(falta);
+        arr = arr.concat((extra[k] || []).filter(x => x && x.prompt));
+      }catch(e){ /* si falla la segunda vuelta, se devuelve lo que hay y el cliente avisa */ }
+    }
+    data[k] = arr.slice(0, n).map((x, i) => ({ ...x, n: i + 1 }));
+  }
+  return data;
+}
+
+/* Otra versión de UNA escena: mismo tramo y contenido, distinto ángulo/composición.
+   tipo: 'vid' | 'img' | 'rep' (réplica: devuelve prompt_imagen + prompt_video) */
+function buildVariante(b){
+  const e = b.escena || {};
+  const tipo = ['vid', 'img', 'rep'].includes(b.tipo) ? b.tipo : 'vid';
+  const P = platInfo(b);
+  const base = tipo === 'rep'
+    ? `Prompt de imagen actual: ${str(e.prompt_imagen, 1500)}
+Prompt de movimiento actual: ${str(e.prompt_video, 1500)}
+Acción: ${str(e.accion, 500)}`
+    : `Prompt actual: ${str(e.prompt, 1500)}`;
+  if(!base.replace(/Prompt[^:]*: ?/g, '').trim()) throw badReq('Falta la escena');
+  const system = `Eres director de fotografía. Reescribes el prompt de UNA escena para una nueva toma: mismo contenido, mismo personaje (su descripción se copia tal cual), misma duración y misma función en el guion, pero con otro ángulo, composición, lente o luz para que el resultado salga distinto y mejor. Prompts en INGLÉS, encuadre ${P.ratio}, sin relaciones de aspecto escritas. Respondes SOLO con JSON válido.`;
+  const prompt = `Estilo visual fijo: ${str(b.estilo, 800)}
+${e.voz ? 'Voz en ese tramo: ' + str(e.voz, 400) + '\n' : ''}${base}
+${b.motivo ? 'Qué falló en la toma anterior: ' + str(b.motivo, 400) + '\n' : ''}Responde SOLO este JSON: ${tipo === 'rep' ? '{"prompt_imagen":"...","prompt_video":"..."}' : '{"prompt":"..."}'}`;
+  return { system, prompt, json: true, maxTokens: 3072, temperature: 0.95 };
 }
 
 function buildExtras(b){
@@ -288,7 +343,7 @@ Responde SOLO este JSON, con un elemento en "por_red" por cada red y en ese orde
 }
 
 const TASKS = { ideas: buildIdeas, guion: buildGuion, refinar: buildRefinar, prompts: buildPrompts, extras: buildExtras,
-                replicar: buildReplicar, analizar: () => null /* necesita preparar el video: se arma en el handler */ };
+                replicar: buildReplicar, variante: buildVariante, analizar: () => null /* necesita preparar el video: se arma en el handler */ };
 
 function badReq(msg){ const e = new Error(msg); e.status = 400; return e; }
 
@@ -386,7 +441,8 @@ export default async function handler(req, res){
         investigacion: news.length ? 'noticias' : 'ninguna' });
     }
     if(body.task === 'analizar') t = buildAnalizar(body, await prepararVideo(body.video));
-    const { data } = await runModels(t);
+    let { data } = await runModels(t);
+    if(body.task === 'prompts') data = await completarPrompts(body, t, data);
     return res.status(200).json(data);
   }catch(lastErr){
     return sendError(res, lastErr);
