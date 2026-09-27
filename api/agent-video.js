@@ -174,6 +174,7 @@ Reglas:
 - Mismo número y orden de escenas, mismo plano, mismo movimiento de cámara y misma duración (cada clip entre 3 y 10 s; si una escena original dura más de 10 s, divídela).
 - Adapta cada acción a los elementos nuevos con sentido (si cambia el producto, la acción gira en torno al nuevo producto).
 - Si cambia el tema, reescribe la voz y los textos en pantalla con la misma estructura, longitud y tono que el original.
+- No escribas relaciones de aspecto (4:3, 16:9, 9:16…) en el ancla ni en los prompts: el formato lo fija Studio.
 - "ancla": descripción fija en inglés de personaje, ambiente y estilo que se repite en TODOS los prompts para que las escenas se vean coherentes.
 - "prompt_imagen": el primer fotograma de la escena (composición, sujeto, ambiente, luz, estilo).
 - "prompt_video": qué se mueve durante el clip (acción + movimiento de cámara), pensado para animar ese primer fotograma en Kling / Seedance.
