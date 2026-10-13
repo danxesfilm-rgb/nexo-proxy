@@ -1,5 +1,15 @@
 /* ============================================================
-   NEXO Proxy · Seedance (ByteDance) vía EvoLink.AI
+   NEXO Proxy · Seedance (ByteDance) vía Higgsfield + EvoLink.AI
+
+   Seedance 2.5 y 2.0 van por Higgsfield (oct-2026). Higgsfield no ofrece
+   2.0 Fast, 1.5 Pro ni Wan 3.0 → esos siguen por EvoLink.
+   Key Higgsfield: env HIGGSFIELD_KEY="id:secret" (o HF_API_KEY_ID +
+   HF_API_KEY_SECRET). Docs: https://docs.higgsfield.ai/
+     POST https://api.higgsfield.ai/bytedance/seedance-2.x/{ruta} → { request_id }
+     GET  https://api.higgsfield.ai/requests/{id}/status           → { status, video.url }
+   El cliente devuelve `kind` en el polling: kind=hf → Higgsfield.
+
+   ── EvoLink ──
    - POST  { prompt, model?, route?, aspectRatio?, duration?,
              resolution?, audio?, refs?[] , image?, image_tail? } → { taskId }
    - GET   ?taskId=...        → { status, url? }
@@ -16,20 +26,27 @@
    sube los archivos a nexoagency.pe/upload.php y manda aquí las URLs.
    ============================================================ */
 
+import { randomUUID } from "node:crypto";
+
 const API_BASE = process.env.EVOLINK_BASE || 'https://api.evolink.ai';
 const KEY      = process.env.EVOLINK_KEY || process.env.SEEDANCE_KEY;
+
+const HF_BASE = process.env.HIGGSFIELD_BASE || 'https://api.higgsfield.ai';
+const HF_KEY  = process.env.HIGGSFIELD_KEY ||
+  (process.env.HF_API_KEY_ID && process.env.HF_API_KEY_SECRET
+    ? `${process.env.HF_API_KEY_ID}:${process.env.HF_API_KEY_SECRET}` : '');
 
 /* Familias disponibles. El ID final se arma como `${familia}-${ruta}`,
    p. ej. seedance-2.0-reference-to-video */
 const FAMILIES = {
   'seedance-2.5': {
-    id:'seedance-2.5',
+    id:'seedance-2.5', hf:'bytedance/seedance-2.5',
     maxImages:30, maxVideos:10, maxAudios:10, maxAssets:50,
     minDur:4, maxDur:30, autoDur:true,
     quality:['480p','720p'],
   },
   'seedance-2.0': {
-    id:'seedance-2.0',
+    id:'seedance-2.0', hf:'bytedance/seedance-2.0',
     maxImages:9, maxVideos:3, maxAudios:3, maxAssets:15,
     minDur:4, maxDur:15, autoDur:false,
     quality:['480p','720p','1080p'],
@@ -84,13 +101,26 @@ export default async function handler(req, res){
   // Diagnóstico: qué familias y límites aplica el servidor (no expone la key)
   if(req.method === 'GET' && req.query && req.query.models){
     return res.status(200).json({ provider:'evolink', base:API_BASE,
+                                  higgsfield:{ base:HF_BASE, key:!!HF_KEY,
+                                    families:Object.keys(FAMILIES).filter(k => FAMILIES[k].hf) },
                                   families:FAMILIES, routes:ROUTES, default:DEFAULT_FAMILY });
   }
 
-  if(!KEY) return res.status(500).json({ error:'Falta EVOLINK_KEY en el servidor' });
   const auth = { Authorization:`Bearer ${KEY}` };
 
   try{
+    /* ── POLLING Higgsfield ── */
+    if(req.method === 'GET' && req.query.kind === 'hf'){
+      return await hfPoll(req, res);
+    }
+    /* ── START Higgsfield (2.5 / 2.0) ── */
+    if(req.method === 'POST'){
+      const fam = FAMILIES[(req.body && req.body.model) || DEFAULT_FAMILY];
+      if(fam && fam.hf && HF_KEY) return await hfStart(req, res, fam);
+    }
+
+    if(!KEY) return res.status(500).json({ error:'Falta EVOLINK_KEY en el servidor' });
+
     /* ── POLLING ── */
     if(req.method === 'GET'){
       const { taskId } = req.query;
@@ -226,4 +256,95 @@ export default async function handler(req, res){
   }catch(e){
     return res.status(500).json({ error: e.message });
   }
+}
+
+/* ── Higgsfield ─────────────────────────────────────────────── */
+const HF_RATIOS = ['16:9','4:3','1:1','3:4','9:16','21:9'];
+
+async function hfStart(req, res, fam){
+  const b = req.body || {};
+  const { prompt, aspectRatio, duration, resolution, audio } = b;
+  if(!prompt) return res.status(400).json({ error:'Falta el prompt' });
+
+  let refs = Array.isArray(b.refs) ? b.refs.filter(Boolean) : [];
+  if(!refs.length && b.image) refs = [b.image];
+  if(b.image_tail) refs.push(b.image_tail);
+  if(refs.find(u => !isHttp(u))){
+    return res.status(400).json({ error:'Las referencias deben ser URLs públicas (http/https).' });
+  }
+  const image_urls = [], video_urls = [], audio_urls = [];
+  for(const u of refs){
+    const k = kindOf(u);
+    if(k === 'video'){ if(video_urls.length < fam.maxVideos) video_urls.push(u); }
+    else if(k === 'audio'){ if(audio_urls.length < fam.maxAudios) audio_urls.push(u); }
+    else { if(image_urls.length < fam.maxImages) image_urls.push(u); }
+  }
+
+  // Misma deducción de ruta que EvoLink
+  let route = ROUTES.includes(b.route) ? b.route : null;
+  if(!route){
+    if(video_urls.length || audio_urls.length || image_urls.length > 1) route = 'reference-to-video';
+    else if(image_urls.length === 1) route = 'image-to-video';
+    else route = 'text-to-video';
+  }
+  if(route !== 'reference-to-video' && (video_urls.length || audio_urls.length)) route = 'reference-to-video';
+  if(route === 'image-to-video' && !image_urls.length) route = 'text-to-video';
+
+  // Higgsfield no tiene duración «auto»: se envían 10 s; el resto se ajusta al rango.
+  const auto = duration === -1 || duration === 'auto';
+  let dur = auto ? 10 : (parseInt(duration) || 5);
+  dur = Math.min(fam.maxDur, Math.max(fam.minDur, dur));
+
+  const q = String(resolution || '720p').toLowerCase();
+  const quality = fam.quality.includes(q) ? q : fam.quality[fam.quality.length-1];
+
+  // Los esquemas de Higgsfield rechazan campos extra (additionalProperties:false)
+  const body = { prompt, duration:dur, resolution:quality, generate_audio: audio !== false };
+  const ratio = HF_RATIOS.includes(String(aspectRatio)) ? aspectRatio : null;
+  if(route === 'image-to-video'){
+    body.image_url = image_urls[0];               // el encuadre sigue a la imagen
+  }else{
+    if(ratio) body.aspect_ratio = ratio;
+    if(route === 'reference-to-video'){
+      if(image_urls.length) body.image_urls = image_urls;
+      if(video_urls.length) body.video_urls = video_urls;
+      if(audio_urls.length) body.audio_urls = audio_urls;
+    }
+  }
+
+  const path = `${fam.hf}/${route}`;
+  const r = await fetch(`${HF_BASE}/${path}`, {
+    method:'POST',
+    headers:{ Authorization:`Key ${HF_KEY}`, 'Content-Type':'application/json',
+              'Idempotency-Key': randomUUID() },
+    body: JSON.stringify(body)
+  });
+  const d = await r.json().catch(() => ({}));
+  if(!r.ok){
+    const det = d.detail;
+    const msg = (typeof det === 'string' ? det : det && JSON.stringify(det)) || d.error || d.message || ('Higgsfield '+r.status);
+    return res.status(r.status).json({ error:`${msg} (modelo: ${path})` });
+  }
+  if(!d.request_id) return res.status(502).json({ error:'Higgsfield no devolvió request_id' });
+  return res.status(200).json({ taskId:d.request_id, kind:'hf', model:path });
+}
+
+async function hfPoll(req, res){
+  const { taskId } = req.query;
+  if(!taskId) return res.status(400).json({ error:'Falta taskId' });
+  if(!HF_KEY) return res.status(500).json({ error:'Falta HIGGSFIELD_KEY en el servidor' });
+  const r = await fetch(`${HF_BASE}/requests/${encodeURIComponent(taskId)}/status`,
+                        { headers:{ Authorization:`Key ${HF_KEY}` } });
+  const d = await r.json().catch(() => ({}));
+  if(!r.ok) return res.status(r.status).json({ error: d.detail || 'Higgsfield poll error' });
+
+  if(d.status === 'completed'){
+    const url = d.video && d.video.url;
+    if(!url) return res.status(200).json({ status:'failed', error:'Tarea completada sin URL de video' });
+    return res.status(200).json({ status:'done', url });
+  }
+  if(d.status === 'nsfw')     return res.status(200).json({ status:'failed', error:'Rechazado por moderación de contenido' });
+  if(d.status === 'failed')   return res.status(200).json({ status:'failed', error: d.error || 'Render fallido' });
+  if(d.status === 'canceled') return res.status(200).json({ status:'failed', error:'Tarea cancelada' });
+  return res.status(200).json({ status:'processing' });
 }

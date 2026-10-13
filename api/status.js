@@ -10,7 +10,7 @@ export default function handler(req, res){
 
   return res.status(200).json({
     gemini:   !!process.env.GEMINI_API_KEY,
-    seedance: !!(process.env.EVOLINK_KEY || process.env.SEEDANCE_KEY),
+    seedance: !!(process.env.EVOLINK_KEY || process.env.SEEDANCE_KEY || process.env.HIGGSFIELD_KEY || process.env.HF_API_KEY_ID),
     kling:    !!process.env.KLING_API_KEY,
     freepik:  !!process.env.FREEPIK_API_KEY,   // Magnific (Nano Banana · Kling · Seedance)
     kie:      !!process.env.KIE_API_KEY,        // KIE (todas las imágenes)
