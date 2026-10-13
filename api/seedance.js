@@ -1,8 +1,9 @@
 /* ============================================================
    NEXO Proxy · Seedance (ByteDance) vía Higgsfield + EvoLink.AI
 
-   Seedance 2.5 y 2.0 van por Higgsfield (oct-2026). Higgsfield no ofrece
-   2.0 Fast, 1.5 Pro ni Wan 3.0 → esos siguen por EvoLink.
+   Todo Seedance y Wan van por EvoLink (13-oct-2026: Higgsfield salía más
+   caro). La rama Higgsfield queda lista pero inactiva: para reactivar una
+   familia, añade `hf:'bytedance/seedance-2.x'` en FAMILIES.
    Key Higgsfield: env HIGGSFIELD_KEY="id:secret" (o HF_API_KEY_ID +
    HF_API_KEY_SECRET). Docs: https://docs.higgsfield.ai/
      POST https://api.higgsfield.ai/bytedance/seedance-2.x/{ruta} → { request_id }
@@ -40,13 +41,13 @@ const HF_KEY  = process.env.HIGGSFIELD_KEY ||
    p. ej. seedance-2.0-reference-to-video */
 const FAMILIES = {
   'seedance-2.5': {
-    id:'seedance-2.5', hf:'bytedance/seedance-2.5',
+    id:'seedance-2.5',
     maxImages:30, maxVideos:10, maxAudios:10, maxAssets:50,
     minDur:4, maxDur:30, autoDur:true,
     quality:['480p','720p'],
   },
   'seedance-2.0': {
-    id:'seedance-2.0', hf:'bytedance/seedance-2.0',
+    id:'seedance-2.0',
     maxImages:9, maxVideos:3, maxAudios:3, maxAssets:15,
     minDur:4, maxDur:15, autoDur:false,
     quality:['480p','720p','1080p'],
