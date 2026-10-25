@@ -18,12 +18,58 @@ import transcribeHandler from './api/transcribe.js';
 import trendsHandler     from './api/trends.js';
 import promptHandler     from './api/prompt.js';
 import agentHandler      from './api/agent.js';
+import socialIgHandler   from './api/social-ig.js';
 import cleanupHandler    from './api/cleanup.js';
 import upscaleHandler    from './api/upscale.js';
 import removebgHandler   from './api/removebg.js';
 
 const app = express();
 app.use(express.json({ limit: '20mb' }));
+
+/* ── Protección de /api/agent (gasta la key de Gemini) ─────────────────
+   · Solo responde a navegadores que vengan de la web de NEXO (o localhost para pruebas).
+   · Límite por IP: 30 puntos/min y 400/hora; 'analizar' (descarga un video) cuenta 10.
+   Quien llame sin cabecera Origin (curl, scripts) no pasa el filtro de origen pero sí el límite. */
+app.set('trust proxy', 1);   // Render va detrás de un proxy: sin esto todos los clientes parecen la misma IP
+const ORIGENES_OK = [
+  /^https:\/\/(www\.)?nexoagency\.pe$/,
+  /^https:\/\/[a-z0-9-]+\.nexostudiope\.workers\.dev$/,
+  /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/,
+];
+const LIMITE_MIN = 30, LIMITE_HORA = 400;
+const usos = new Map();   // ip → [{ t, c }]
+setInterval(() => {
+  const corte = Date.now() - 3600e3;
+  for (const [ip, a] of usos) { const v = a.filter(x => x.t > corte); v.length ? usos.set(ip, v) : usos.delete(ip); }
+}, 5 * 60e3).unref();
+
+function guardAgent(req, res, next) {
+  const o = req.headers.origin;
+  if (o) {
+    if (!ORIGENES_OK.some(r => r.test(o))) return res.status(403).json({ error: 'Origen no permitido' });
+    res.setHeader('Access-Control-Allow-Origin', o);
+    res.setHeader('Vary', 'Origin');
+  }
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    return res.status(204).end();
+  }
+  const ahora = Date.now(), ip = req.ip || 'sin-ip';
+  const costo = req.body && req.body.task === 'analizar' ? 10 : 1;
+  if (usos.size > 5000) usos.clear();   // tope de memoria
+  const a = (usos.get(ip) || []).filter(x => x.t > ahora - 3600e3);
+  const suma = arr => arr.reduce((n, x) => n + x.c, 0);
+  if (suma(a.filter(x => x.t > ahora - 60e3)) + costo > LIMITE_MIN || suma(a) + costo > LIMITE_HORA) {
+    res.setHeader('Retry-After', '60');
+    return res.status(429).json({ error: 'Demasiadas solicitudes seguidas. Espera un minuto e inténtalo de nuevo.' });
+  }
+  a.push({ t: ahora, c: costo });
+  usos.set(ip, a);
+  next();
+}
+app.options('/api/agent', guardAgent);
+app.options('/api/social-ig', guardAgent);   // antes del OPTIONS genérico, que respondería con '*'
 
 function route(handler) {
   return (req, res) => handler(req, res);
@@ -49,7 +95,8 @@ app.all('/api/download',   route(downloadHandler));
 app.all('/api/transcribe', route(transcribeHandler));
 app.all('/api/trends',     route(trendsHandler));
 app.all('/api/prompt',     route(promptHandler));
-app.all('/api/agent',      route(agentHandler));
+app.all('/api/agent',      guardAgent, route(agentHandler));
+app.all('/api/social-ig',  guardAgent, route(socialIgHandler));   // Viral Lab · Instagram (el token no se guarda)
 app.all('/api/cleanup',    route(cleanupHandler));
 app.all('/api/upscale',    route(upscaleHandler));
 app.all('/api/removebg',   route(removebgHandler));

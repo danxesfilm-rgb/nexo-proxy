@@ -11,11 +11,19 @@
    ============================================================ */
 const GEMINI_KEY = process.env.GEMINI_TEXT_KEY || process.env.GEMINI_API_KEY;
 
-// Si Google retira un ID de modelo, se prueba el siguiente de la lista
+// Si un modelo no existe o está saturado, se prueba el siguiente de la lista.
+// Los alias "-latest" van al final como red: Google siempre los mantiene vivos.
 const MODELS = [
   process.env.GEMINI_TEXT_MODEL || 'gemini-3.5-flash-lite',
   'gemini-3.6-flash',
+  'gemini-flash-lite-latest',
+  'gemini-flash-latest',
 ].filter((m, i, a) => m && a.indexOf(m) === i);
+
+// 503 "high demand" / 500 / 429 por modelo: son picos pasajeros de Google,
+// no fallos nuestros → se reintenta una vez y luego se cambia de modelo.
+const TRANSITORIO = s => s === 429 || s === 500 || s === 503 || s === 504;
+const espera = ms => new Promise(r => setTimeout(r, ms));
 
 /* Los dos system prompts comparten la misma disciplina: precisar lo que el
    usuario ya escribió, no inventar una escena nueva encima. */
@@ -99,18 +107,27 @@ export default async function handler(req, res){
 
     let lastErr;
     for(const model of MODELS){
-      try{
-        const text = await askGemini(model, system, prompt);
-        return res.status(200).json({ prompt: text, model });
-      }catch(e){
-        lastErr = e;
-        // 404 = ese ID de modelo ya no existe → probar el siguiente
-        if(e.status !== 404) break;
+      for(let intento = 0; intento < 2; intento++){
+        try{
+          const text = await askGemini(model, system, prompt);
+          return res.status(200).json({ prompt: text, model });
+        }catch(e){
+          lastErr = e;
+          // saturado → un reintento corto en el mismo modelo
+          if(intento === 0 && TRANSITORIO(e.status)){ await espera(700); continue; }
+          break;
+        }
       }
+      // 404 = ese ID ya no existe · transitorio = saturado → siguiente modelo.
+      // Cualquier otra cosa (key bloqueada, 400…) no se arregla cambiando de modelo.
+      if(lastErr.status !== 404 && !TRANSITORIO(lastErr.status)) break;
     }
     // 429 = cuota gratuita agotada por hoy; el cliente sigue con el prompt original
     const status = lastErr?.status === 429 ? 429 : 500;
-    return res.status(status).json({ error: lastErr?.message || 'No se pudo mejorar el prompt' });
+    const msg = TRANSITORIO(lastErr?.status)
+      ? 'Gemini está saturado en este momento. Intenta de nuevo en unos segundos.'
+      : (lastErr?.message || 'No se pudo mejorar el prompt');
+    return res.status(status).json({ error: msg });
 
   }catch(e){
     return res.status(500).json({ error: e.message });

@@ -24,6 +24,8 @@
    ============================================================ */
 import { fetchNews } from './trends.js';
 import { prepararVideo, buildAnalizar, buildReplicar } from './agent-video.js';
+import { makeSocialTasks } from './social.js';
+import { makeAcuerdoTasks } from './acuerdos.js';
 
 const GEMINI_KEY = process.env.GEMINI_TEXT_KEY || process.env.GEMINI_API_KEY;
 
@@ -344,6 +346,10 @@ Responde SOLO este JSON, con un elemento en "por_red" por cada red y en ese orde
 
 const TASKS = { ideas: buildIdeas, guion: buildGuion, refinar: buildRefinar, prompts: buildPrompts, extras: buildExtras,
                 replicar: buildReplicar, variante: buildVariante, analizar: () => null /* necesita preparar el video: se arma en el handler */ };
+// Viral Lab (/social/): carruseles, motion, puntuación, auditoría y calendario
+Object.assign(TASKS, makeSocialTasks({ PLAYBOOK, SCORE_RULES, SCORE_JSON, LANG, tonoLine, fechaHoy, str, int, badReq }));
+// Acuerdos (/acuerdos/): lee capturas de pagos, proformas y chats con clientes
+Object.assign(TASKS, makeAcuerdoTasks({ str, badReq }));
 
 function badReq(msg){ const e = new Error(msg); e.status = 400; return e; }
 
@@ -405,7 +411,8 @@ function parseJSON(raw){
 }
 
 export default async function handler(req, res){
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // server.js ya fija el origen concreto (y rechaza los ajenos); el '*' queda solo para quien llame sin pasar por él
+  if(!res.getHeader('Access-Control-Allow-Origin')) res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if(req.method === 'OPTIONS') return res.status(204).end();

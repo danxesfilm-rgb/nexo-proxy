@@ -13,8 +13,11 @@
      - Archivo subido → URL pública (R2) que da el Worker de subida
    Hasta ~12 MB va inline; más grande se sube a la Files API de Gemini.
    ============================================================ */
+import dns from 'node:dns/promises';
+import net from 'node:net';
+
 const GEMINI_KEY = process.env.GEMINI_TEXT_KEY || process.env.GEMINI_API_KEY;
-const API_ROOT   = 'https://generativelanguage.googleapis.com';
+const API_ROOT  = 'https://generativelanguage.googleapis.com';
 const YTDLP      = process.env.YT_SERVER_URL || 'https://nexo-proxy.onrender.com';
 
 const MAX_BYTES    = 100 * 1024 * 1024;   // mismo tope que el Worker de subida
@@ -24,8 +27,38 @@ const LANG = { 'es-LA':'español latinoamericano neutro', 'es-ES':'español de E
 const str  = (v, max) => String(v == null ? '' : v).slice(0, max);
 const err  = (msg, status) => { const e = new Error(msg); e.status = status || 400; return e; };
 
-const isYouTube = u => /(^|\.)youtube\.com\/|youtu\.be\//i.test(u);
-const plataforma = u => /tiktok\.com/i.test(u) ? 'tiktok' : /instagram\.com/i.test(u) ? 'instagram' : null;
+/* Los enlaces se juzgan por su HOST, no por texto suelto: antes bastaba con que la URL
+   contuviera "tiktok.com" (p. ej. en la query) para aceptarla. */
+const parseUrl = u => { try{ const x = new URL(u); return /^https?:$/.test(x.protocol) ? x : null; }catch(e){ return null; } };
+const hostIs = (h, ...doms) => doms.some(d => h === d || h.endsWith('.' + d));
+const hostDe = u => { const x = parseUrl(u); return x ? x.hostname.toLowerCase() : ''; };
+const isYouTube  = u => hostIs(hostDe(u), 'youtube.com', 'youtu.be');
+const plataforma = u => { const h = hostDe(u); return hostIs(h, 'tiktok.com') ? 'tiktok' : hostIs(h, 'instagram.com') ? 'instagram' : null; };
+// Videos que sube la propia web (Worker nexo-upload → R2 o nexoagency.pe)
+const esSubidaPropia = u => { const x = parseUrl(u); const h = hostDe(u);
+  return !!x && x.protocol === 'https:' && (hostIs(h, 'nexoagency.pe') || /^pub-[a-z0-9]+\.r2\.dev$/.test(h)); };
+
+/* El servidor descarga lo que le pasan: nunca debe poder visitar la red interna
+   (localhost, 169.254.169.254 de los metadatos de la nube, rangos privados). */
+function esPrivada(ip){
+  if(net.isIPv4(ip)){
+    const [a, b] = ip.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
+        || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+  }
+  const v = ip.toLowerCase();
+  if(v.startsWith('::ffff:')){ const r = v.slice(7); return net.isIPv4(r) ? esPrivada(r) : true; }
+  return v === '::' || v === '::1' || /^f[cd]/.test(v) || /^fe[89ab]/.test(v);
+}
+async function verificarPublica(u){
+  const x = parseUrl(u);
+  if(!x) throw err('El enlace no es válido');
+  if(x.port && x.port !== '80' && x.port !== '443') throw err('Ese enlace no está permitido', 422);
+  const host = x.hostname.replace(/^\[|\]$/g, '');
+  const dirs = net.isIP(host) ? [{ address: host }]
+    : await dns.lookup(host, { all: true }).catch(() => { throw err('No se pudo resolver el enlace del video', 422); });
+  if(!dirs.length || dirs.some(d => esPrivada(d.address))) throw err('Ese enlace no está permitido', 422);
+}
 
 /* Enlace directo de un TikTok/Instagram vía el servicio yt-dlp */
 async function linkDirecto(url, service){
@@ -39,16 +72,40 @@ async function linkDirecto(url, service){
   return (v && v.url) || d.downloadUrl;
 }
 
+const PESADO = () => err('El video pesa más de 100 MB. Recórtalo o bájale la calidad.', 413);
+
+/* Lee el cuerpo por trozos y corta al pasar el tope: no se carga en memoria un archivo gigante
+   aunque el servidor remoto mienta (o no declare) el Content-Length. */
+async function leerConTope(r, max){
+  const trozos = []; let n = 0;
+  for await (const c of r.body){
+    n += c.length;
+    if(n > max){ try{ await r.body.cancel(); }catch(e){} throw PESADO(); }
+    trozos.push(c);
+  }
+  return Buffer.concat(trozos);
+}
+
 async function descargar(url){
-  const r = await fetch(url, { headers:{ 'User-Agent':'Mozilla/5.0 (compatible; NexoBot/1.0)' } });
-  if(!r.ok) throw err(`No se pudo leer el video (${r.status})`, 422);
-  const len = +r.headers.get('content-length') || 0;
-  if(len > MAX_BYTES) throw err('El video pesa más de 100 MB. Recórtalo o bájale la calidad.', 413);
-  const buf = Buffer.from(await r.arrayBuffer());
-  if(buf.length > MAX_BYTES) throw err('El video pesa más de 100 MB. Recórtalo o bájale la calidad.', 413);
-  let mime = (r.headers.get('content-type') || '').split(';')[0].trim();
-  if(!/^video\//.test(mime)) mime = /\.webm(\?|$)/i.test(url) ? 'video/webm' : /\.mov(\?|$)/i.test(url) ? 'video/quicktime' : 'video/mp4';
-  return { buf, mime };
+  let actual = url;
+  // Las redirecciones se siguen a mano (máx. 3) y cada salto se revalida: un enlace público
+  // no puede rebotar hacia una dirección interna.
+  for(let salto = 0; salto <= 3; salto++){
+    await verificarPublica(actual);
+    const r = await fetch(actual, {
+      redirect:'manual', signal: AbortSignal.timeout(90000),
+      headers:{ 'User-Agent':'Mozilla/5.0 (compatible; NexoBot/1.0)' },
+    });
+    const loc = r.headers.get('location');
+    if(r.status >= 300 && r.status < 400 && loc){ actual = new URL(loc, actual).href; continue; }
+    if(!r.ok) throw err(`No se pudo leer el video (${r.status})`, 422);
+    if((+r.headers.get('content-length') || 0) > MAX_BYTES) throw PESADO();
+    const buf = await leerConTope(r, MAX_BYTES);
+    let mime = (r.headers.get('content-type') || '').split(';')[0].trim();
+    if(!/^video\//.test(mime)) mime = /\.webm(\?|$)/i.test(actual) ? 'video/webm' : /\.mov(\?|$)/i.test(actual) ? 'video/quicktime' : 'video/mp4';
+    return { buf, mime };
+  }
+  throw err('El enlace del video redirige demasiadas veces', 422);
 }
 
 /* Files API de Gemini: subida reanudable en un solo envío + espera a que quede ACTIVE */
@@ -99,7 +156,8 @@ export async function prepararVideo(v){
       ? { inline_data:{ mime_type: mime, data: buf.toString('base64') } }
       : await subirAGemini(buf, mime);
   }
-  if(!/^https?:\/\//i.test(url)) throw err('Falta el video');
+  if(!parseUrl(url)) throw err('Falta el video');
+  if(!esSubidaPropia(url)) throw err('Solo se aceptan videos subidos desde la web. Para otros enlaces usa el campo de enlace.', 422);
   const { buf, mime } = await descargar(url);
   return buf.length <= INLINE_BYTES
     ? { inline_data:{ mime_type: mime, data: buf.toString('base64') } }
