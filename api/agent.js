@@ -26,6 +26,7 @@ import { fetchNews } from './trends.js';
 import { prepararVideo, buildAnalizar, buildReplicar } from './agent-video.js';
 import { makeSocialTasks } from './social.js';
 import { makeAcuerdoTasks } from './acuerdos.js';
+import { makeCrmTasks } from './crm.js';
 
 const GEMINI_KEY = process.env.GEMINI_TEXT_KEY || process.env.GEMINI_API_KEY;
 
@@ -350,6 +351,8 @@ const TASKS = { ideas: buildIdeas, guion: buildGuion, refinar: buildRefinar, pro
 Object.assign(TASKS, makeSocialTasks({ PLAYBOOK, SCORE_RULES, SCORE_JSON, LANG, tonoLine, fechaHoy, str, int, badReq }));
 // Acuerdos (/acuerdos/): lee capturas de pagos, proformas y chats con clientes
 Object.assign(TASKS, makeAcuerdoTasks({ str, badReq }));
+// CRM (/crm): observaciones de proforma, plan de trabajo y asistente
+Object.assign(TASKS, makeCrmTasks({ str, badReq }));
 
 function badReq(msg){ const e = new Error(msg); e.status = 400; return e; }
 
