@@ -28,6 +28,7 @@ import { makeSocialTasks } from './social.js';
 import { makeAcuerdoTasks } from './acuerdos.js';
 import { makeCrmTasks } from './crm.js';
 import { makeGastoTasks } from './gastos.js';
+import { makeEditorTasks } from './editor.js';
 
 const GEMINI_KEY = process.env.GEMINI_TEXT_KEY || process.env.GEMINI_API_KEY;
 
@@ -356,6 +357,8 @@ Object.assign(TASKS, makeAcuerdoTasks({ str, badReq }));
 Object.assign(TASKS, makeCrmTasks({ str, badReq }));
 // Reporte de gastos (/reporte): lee boletas, facturas, Yape, Plin y transferencias
 Object.assign(TASKS, makeGastoTasks({ badReq }));
+// Editor de video (/editor): montaje automático, tendencias, estilo de una referencia y subtítulos
+Object.assign(TASKS, makeEditorTasks({ str, badReq }));
 
 function badReq(msg){ const e = new Error(msg); e.status = 400; return e; }
 
@@ -452,6 +455,21 @@ export default async function handler(req, res){
         fuentes: news.slice(0, 8).map(n => ({ title: n.source || 'Google News', uri: n.link })),
         busquedas: news.length ? [`Google News: ${tema}`] : [],
         investigacion: news.length ? 'noticias' : 'ninguna' });
+    }
+    // Tendencias del editor: con búsqueda de Google; sin cuota, plan B con titulares de Google News
+    if(body.task === 'ed_tendencias'){
+      if(Date.now() >= searchBlockedUntil){
+        try{
+          const { data, g } = await runModels(t);
+          return res.status(200).json({ ...data, fuentes: g.fuentes });
+        }catch(e){
+          if(e.status !== 429) throw e;
+          searchBlockedUntil = Date.now() + SEARCH_PAUSE_MS;
+        }
+      }
+      const news = await fetchNews(str(body.nicho, 160).trim(), body.lang, 10).catch(() => []);
+      const { data } = await runModels(build(body, news));
+      return res.status(200).json({ ...data, fuentes: [] });
     }
     if(body.task === 'analizar') t = buildAnalizar(body, await prepararVideo(body.video));
     let { data } = await runModels(t);
