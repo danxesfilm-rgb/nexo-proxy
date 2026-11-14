@@ -77,6 +77,7 @@ Reglas:
 - "gancho": el texto exacto en pantalla del primer segundo, máximo 8 palabras, en ${idioma(b)}.
 - "estructura": de 3 a 6 bloques que cubran de 0 hasta el final (15 a 45 s en total), sin huecos. "que" = qué se muestra o se dice; "texto" = el texto en pantalla de ese bloque (máximo 7 palabras, "" si ninguno).
 - "musica": tipo de audio que le va (no inventes nombres de canciones ni de cuentas).
+- Hoy es ${new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}: si mencionas un año, que sea el actual; no cites años pasados.
 - No inventes cifras de vistas ni atribuyas videos a cuentas concretas.${buscar ? '\n- Apóyate en lo que encuentres en la búsqueda sobre tendencias recientes del nicho y de la plataforma.' : ''}
 ${ESTILO}`;
     const contexto = Array.isArray(news) && news.length ? `\nTitulares recientes sobre el tema (contexto):\n${news.slice(0, 10).map(n => '- ' + str(n.title, 160)).join('\n')}\n` : '';
