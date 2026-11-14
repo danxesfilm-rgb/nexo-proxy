@@ -22,6 +22,7 @@ const ESTILO = `"estilo" describe cómo se ve y se monta el video. Usa EXACTAMEN
 {"look":{"exp":0,"con":0,"sat":0,"vib":0,"temp":0,"tint":0,"hi":0,"sh":0,"fade":0,"film":0,"shHue":210,"shAmt":0,"hiHue":35,"hiAmt":0,"vig":0,"grain":0},
  "texto":{"font":"Montserrat","weight":800,"size":80,"color":"#ffffff","stroke":"#000000","strokeW":0,"bg":"","upper":false,"karaoke":false,"hl":"#ffe600","pos":"abajo","anim":"pop"},
  "transicion":{"type":"fade","dur":0.3},"plano_seg":2,"movimiento":"none"}
+En tu respuesta, "look", "texto" y "transicion" van COMPLETOS, con todas sus claves y valores reales (nunca vacíos ni con puntos suspensivos). La respuesta debe ser JSON válido: comillas dobles, sin comentarios, sin texto antes ni después.
 Significado y rangos:
 - look: corrección de color. exp (exposición), con (contraste), sat (saturación), vib, temp (+ cálido / − frío), tint, hi (luces), sh (sombras): de -0.6 a 0.6, 0 = sin cambio. fade (negros lavados), film (curva de cine), vig (viñeta), grain (grano): de 0 a 0.8. shHue/hiHue: tono de 0 a 360 con que se tiñen sombras y luces (teal ≈ 195, azul ≈ 215, naranja ≈ 32, magenta ≈ 320, verde ≈ 150); shAmt/hiAmt: de 0 a 0.8. Sé sutil: un look de cine rara vez pasa de 0.3 en exp/con/sat.
 - texto.font: una de ${FONTS.join(', ')}. weight: 400, 500, 700, 800 o 900. size: 40 a 160 (para un cuadro de 1080 px de ancho). color, stroke, hl: hex #rrggbb. strokeW: 0 a 14. bg: "" o un hex si el texto va dentro de una caja. pos: "arriba", "centro" o "abajo". anim: none, fade, pop, zoom, slideUp, blur, typewriter o words. karaoke: true si se resalta la palabra que se va diciendo (hl = color del resaltado).
@@ -60,7 +61,7 @@ Material:
 ${lista.join('\n')}
 
 Responde SOLO este JSON:
-{"titulo":"nombre corto del video","musica":"...","clips":[{"i":0,"desde":0,"dur":1.5}],"textos":[{"desde":0,"hasta":1.5,"texto":"..."}],"estilo":{...}}`;
+{"titulo":"nombre corto del video","musica":"...","clips":[{"i":0,"desde":0,"dur":1.5}],"textos":[{"desde":0,"hasta":1.5,"texto":"..."}],"estilo":{"look":{},"texto":{},"transicion":{},"plano_seg":2,"movimiento":"none"}}`;
     return { system, prompt, media, json: true, maxTokens: 6144, temperature: 0.7 };
   }
 
@@ -82,7 +83,7 @@ ${ESTILO}`;
     const prompt = `Nicho: ${nicho}
 Plataforma: ${red} · formato ${str(b.formato, 8) || '9:16'}${contexto}
 Responde SOLO este JSON:
-{"tendencias":[{"titulo":"nombre del formato","por_que":"...","gancho":"...","estructura":[{"desde":0,"hasta":2,"que":"...","texto":"..."}],"estilo":{...},"musica":"..."}]}`;
+{"tendencias":[{"titulo":"nombre del formato","por_que":"...","gancho":"...","estructura":[{"desde":0,"hasta":2,"que":"...","texto":"..."}],"estilo":{"look":{},"texto":{},"transicion":{},"plano_seg":2,"movimiento":"none"},"musica":"..."}]}`;
     return { system, prompt, json: !buscar, search: buscar, maxTokens: 8192, temperature: 0.8 };
   }
 
@@ -103,7 +104,7 @@ ${ESTILO}`;
 Valores de color medidos por el editor: ${medido}
 
 Responde SOLO este JSON:
-{"resumen":"...","claves":["..."],"estilo":{...}}`;
+{"resumen":"...","claves":["..."],"estilo":{"look":{},"texto":{},"transicion":{},"plano_seg":2,"movimiento":"none"}}`;
     return { system, prompt, media, json: true, maxTokens: 4096, temperature: 0.4 };
   }
 

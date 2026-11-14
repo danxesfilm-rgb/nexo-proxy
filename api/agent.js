@@ -463,8 +463,9 @@ export default async function handler(req, res){
           const { data, g } = await runModels(t);
           return res.status(200).json({ ...data, fuentes: g.fuentes });
         }catch(e){
-          if(e.status !== 429) throw e;
-          searchBlockedUntil = Date.now() + SEARCH_PAUSE_MS;
+          // 429 = sin cuota de búsqueda (se pausa un rato) · 502 = con búsqueda no hay modo JSON y a veces llega mal formado
+          if(e.status !== 429 && e.status !== 502) throw e;
+          if(e.status === 429) searchBlockedUntil = Date.now() + SEARCH_PAUSE_MS;
         }
       }
       const news = await fetchNews(str(body.nicho, 160).trim(), body.lang, 10).catch(() => []);
