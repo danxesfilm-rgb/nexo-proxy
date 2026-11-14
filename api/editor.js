@@ -39,15 +39,20 @@ export function makeEditorTasks({ str, badReq }){
 
   function buildMontaje(b){
     const clips = Array.isArray(b.clips) ? b.clips.slice(0, 14) : [];
+    const per = Math.max(1, Math.floor(80 / Math.max(1, clips.length)));
     if(!clips.length) throw badReq('Faltan los clips');
     const dur = Math.min(120, Math.max(6, Number(b.dur) || 30)), media = [], lista = [];
     clips.forEach((c, n) => {
       const d = Math.max(0, Number(c.dur) || 0), tipo = c.tipo === 'image' ? 'foto' : 'video';
-      lista.push(`Clip ${n}: "${str(c.nombre, 60)}" · ${tipo}${tipo === 'video' ? ` de ${d.toFixed(1)} s` : ''}${c.frame ? ' · su fotograma es la imagen nº ' + (media.length + 1) : ''}`);
-      if(c.frame) media.push(jpg(c.frame, 'El fotograma del clip'));
+      const fr = (Array.isArray(c.frames) ? c.frames : c.frame ? [{ t: 0, data: c.frame }] : []).filter(f => f && f.data).slice(0, per);
+      const vistos = fr.map(f => { media.push(jpg(f.data, 'Un fotograma del clip')); return `imagen ${media.length} = segundo ${Math.max(0, Number(f.t) || 0).toFixed(1)}`; });
+      lista.push(`Clip ${n}: "${str(c.nombre, 60)}" · ${tipo}${tipo === 'video' ? ` de ${d.toFixed(1)} s` : ''}${vistos.length ? ' · fotogramas: ' + vistos.join(', ') : ''}`);
     });
     const system = `Eres un editor de video profesional de contenido corto para redes (Reels, TikTok, Shorts). Con el material disponible armas un montaje que retiene: gancho en los primeros 2 segundos, ritmo, y cierre con llamada a la acción.
 Reglas:
+- MIRA los fotogramas de cada clip (cada uno dice a qué segundo del clip corresponde) y elige los mejores momentos: acción, rostros y expresiones, detalles del producto, buena luz y foco. Descarta los tramos movidos, borrosos, oscuros o donde no pasa nada, y usa "desde" para empezar justo en el momento bueno.
+- Ordena los planos para contar algo (gancho → desarrollo → cierre), no en el orden en que llegaron. El gancho debe ser el plano más llamativo de todo el material.
+- Los textos deben corresponder a lo que se ve en cada plano.
 - Usa SOLO los clips de la lista, por su número. Puedes repetir un clip con otro tramo, y dejar fuera los que no aporten.
 - "desde" + "dur" nunca puede pasar de la duración del clip. En fotos, "desde" = 0 y "dur" entre 1.2 y 4.
 - La suma de "dur" debe quedar cerca de ${dur} s (si el material no alcanza, haz un video más corto; no lo estires).
